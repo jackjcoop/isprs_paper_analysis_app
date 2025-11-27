@@ -9,13 +9,11 @@ PyMuPDF>=1.23.0
 
 # Named Entity Recognition (for anonymization checking)
 spacy>=3.7.0
+en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1-py3-none-any.whl
 
 # Web Interface
 streamlit>=1.28.0
 
-# After installing, download spaCy model:
-#   python -m spacy download en_core_web_sm
-#
-# External tools (optional):
+# External tools (optional, for local use):
 #   - LibreOffice: Word to PDF conversion
 #   - pdflatex: LaTeX to PDF conversion
