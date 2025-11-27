@@ -155,7 +155,7 @@ class ComplianceValidator:
 
         # Check anonymization (if provided)
         if anonymization_result:
-            self._check_anonymization(anonymization_result)
+            self._check_anonymization(anonymization_result, extracted_elements)
 
         # Check ISPRS formatting (if page info provided)
         if page_count is not None and page_dimensions is not None:
@@ -481,7 +481,7 @@ class ComplianceValidator:
                 details=f"Validated {len(validation.get('citations', []))} citation(s)"
             ))
 
-    def _check_anonymization(self, anonymization_result):
+    def _check_anonymization(self, anonymization_result, extracted_elements: Dict[str, List]):
         """Check anonymization validation results."""
         if anonymization_result.is_anonymous:
             self.results.append(ValidationResult(
@@ -492,18 +492,31 @@ class ComplianceValidator:
                 details=f"No PERSON entities found in {', '.join(anonymization_result.sections_checked)}"
             ))
         else:
-            entities_preview = ', '.join(
-                e.text for e in anonymization_result.entities_found[:5]
-            )
-            if len(anonymization_result.entities_found) > 5:
+            # Get PERSON entities for the message
+            person_entities = [e for e in anonymization_result.entities_found if e.label == 'PERSON']
+            entities_preview = ', '.join(e.text for e in person_entities[:5])
+            if len(person_entities) > 5:
                 entities_preview += '...'
+
+            # Build element_refs to highlight Authors/Affiliations sections
+            element_refs = []
+            for section_name in anonymization_result.sections_checked:
+                elements = extracted_elements.get(section_name, [])
+                for elem in elements:
+                    if hasattr(elem, 'page') and hasattr(elem, 'bbox'):
+                        bbox = elem.bbox
+                        if hasattr(bbox, 'x0'):
+                            bbox = (bbox.x0, bbox.y0, bbox.x1, bbox.y1)
+                        instance_msg = f"{section_name} section contains identifying information: {entities_preview}"
+                        element_refs.append((elem.page, bbox, instance_msg))
 
             self.results.append(ValidationResult(
                 check_name="Anonymization Check",
                 passed=False,
                 severity=Severity.WARNING,
                 message=f"Document contains {anonymization_result.total_person_entities} PERSON entity/entities",
-                details=f"Found in {', '.join(anonymization_result.sections_checked)}: {entities_preview}"
+                details=f"Found in {', '.join(anonymization_result.sections_checked)}: {entities_preview}",
+                element_refs=element_refs if element_refs else None
             ))
 
         # Also report ORG and GPE entities as info
