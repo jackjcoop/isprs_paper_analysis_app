@@ -1,0 +1,18 @@
+# ISPRS Paper Formatting Analyzer - Dependencies
+
+# Google Cloud Document AI
+google-cloud-documentai>=2.0.0
+google-auth>=2.0.0
+
+# PDF Processing
+PyMuPDF>=1.23.0
+
+# Named Entity Recognition (for anonymization checking)
+spacy>=3.7.0
+
+# After installing, download spaCy model:
+#   python -m spacy download en_core_web_sm
+#
+# External tools (optional):
+#   - LibreOffice: Word to PDF conversion
+#   - pdflatex: LaTeX to PDF conversion
