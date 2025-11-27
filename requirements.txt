@@ -10,6 +10,9 @@ PyMuPDF>=1.23.0
 # Named Entity Recognition (for anonymization checking)
 spacy>=3.7.0
 
+# Web Interface
+streamlit>=1.28.0
+
 # After installing, download spaCy model:
 #   python -m spacy download en_core_web_sm
 #
