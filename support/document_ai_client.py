@@ -46,7 +46,8 @@ class DocumentAIClient:
         project_id: str = "582708116407",
         location: str = "us",
         processor_id: str = "bbfe5b3adc33b351",
-        credentials_path: Optional[str] = None
+        credentials_path: Optional[str] = None,
+        credentials_info: Optional[Dict] = None
     ):
         """
         Initialize Document AI client.
@@ -56,13 +57,21 @@ class DocumentAIClient:
             location: Processor location
             processor_id: Document AI processor ID
             credentials_path: Path to service account credentials JSON
+            credentials_info: Service account credentials as dict (for Streamlit secrets)
         """
         self.project_id = project_id
         self.location = location
         self.processor_id = processor_id
 
-        # Set up credentials
-        if credentials_path and os.path.exists(credentials_path):
+        # Set up credentials (priority: credentials_info > credentials_path > default)
+        if credentials_info:
+            credentials = service_account.Credentials.from_service_account_info(
+                credentials_info
+            )
+            self.client = documentai.DocumentProcessorServiceClient(
+                credentials=credentials
+            )
+        elif credentials_path and os.path.exists(credentials_path):
             credentials = service_account.Credentials.from_service_account_file(
                 credentials_path
             )

@@ -130,10 +130,16 @@ if uploaded_file is not None:
                     stderr_capture = io.StringIO()
 
                     with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
+                        # Get GCP credentials from secrets (if available)
+                        gcp_credentials = None
+                        if "gcp_service_account" in st.secrets:
+                            gcp_credentials = dict(st.secrets["gcp_service_account"])
+
                         # Run analyzer
                         analyzer = PDFComplianceAnalyzer(
                             check_anonymization=check_anon,
-                            generate_report=True
+                            generate_report=True,
+                            credentials_info=gcp_credentials
                         )
                         result = analyzer.analyze(str(tmp_pdf))
 

@@ -70,6 +70,7 @@ class PDFComplianceAnalyzer:
     def __init__(
         self,
         credentials_path: str = None,
+        credentials_info: dict = None,
         check_anonymization: bool = False,
         generate_report: bool = False
     ):
@@ -78,10 +79,12 @@ class PDFComplianceAnalyzer:
 
         Args:
             credentials_path: Path to Google Cloud credentials
+            credentials_info: GCP credentials as dict (for Streamlit secrets)
             check_anonymization: Whether to check for anonymization
             generate_report: Whether to generate annotated PDF report
         """
         self.credentials_path = credentials_path
+        self.credentials_info = credentials_info
         self.check_anonymization = check_anonymization
         self.generate_report_flag = generate_report
 
@@ -114,7 +117,8 @@ class PDFComplianceAnalyzer:
         # Step 2: Extract using Document AI
         with ProgressIndicator("Extracting text and bounding boxes (Document AI)"):
             doc_ai_client = DocumentAIClient(
-                credentials_path=self.credentials_path
+                credentials_path=self.credentials_path,
+                credentials_info=self.credentials_info
             )
             doc_ai_document = doc_ai_client.process_document(pdf_path)
             ai_elements = doc_ai_client.extract_elements_by_type(doc_ai_document)
