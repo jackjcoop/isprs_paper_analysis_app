@@ -43,17 +43,25 @@ class AnonymizationChecker:
         self._load_model()
 
     def _load_model(self):
-        """Load spaCy model with error handling."""
+        """Load spaCy model with error handling and auto-download fallback."""
         try:
             import spacy
+            import subprocess
             try:
                 self.nlp = spacy.load(self.model_name)
             except OSError:
-                # Model not found, suggest download
-                raise RuntimeError(
-                    f"spaCy model '{self.model_name}' not found. "
-                    f"Please install it with: python -m spacy download {self.model_name}"
-                )
+                # Model not found, try to download it
+                try:
+                    subprocess.run(
+                        ["python", "-m", "spacy", "download", self.model_name],
+                        check=True
+                    )
+                    self.nlp = spacy.load(self.model_name)
+                except Exception:
+                    raise RuntimeError(
+                        f"spaCy model '{self.model_name}' not found and auto-download failed. "
+                        f"Please install it with: python -m spacy download {self.model_name}"
+                    )
         except ImportError:
             raise RuntimeError(
                 "spaCy is not installed. Please install it with: pip install spacy"

@@ -12,12 +12,18 @@ from dataclasses import dataclass, field
 # Optional spaCy import for NER-based citation parsing
 try:
     import spacy
+    import subprocess
     SPACY_AVAILABLE = True
     try:
         _nlp = spacy.load("en_core_web_sm")
     except OSError:
-        SPACY_AVAILABLE = False
-        _nlp = None
+        # Try to download the model
+        try:
+            subprocess.run(["python", "-m", "spacy", "download", "en_core_web_sm"], check=True)
+            _nlp = spacy.load("en_core_web_sm")
+        except Exception:
+            SPACY_AVAILABLE = False
+            _nlp = None
 except ImportError:
     SPACY_AVAILABLE = False
     _nlp = None
