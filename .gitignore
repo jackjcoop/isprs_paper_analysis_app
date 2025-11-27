@@ -38,6 +38,9 @@ ENV/
 *.key.json
 service-account*.json
 
+# Streamlit secrets (IMPORTANT: Never commit!)
+.streamlit/secrets.toml
+
 # Output files
 *_analysis.json
 *.log

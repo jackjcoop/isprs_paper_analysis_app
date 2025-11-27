@@ -34,6 +34,54 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+
+# --- Authentication ---
+def check_password():
+    """Returns True if user has correct credentials."""
+
+    def login_form():
+        """Display login form."""
+        st.title("🔐 ISPRS Paper Analyzer")
+        st.markdown("Please log in to access the application.")
+        st.divider()
+
+        with st.form("login_form"):
+            st.text_input("Username", key="username")
+            st.text_input("Password", type="password", key="password")
+            submitted = st.form_submit_button("Login", use_container_width=True)
+
+            if submitted:
+                if (st.session_state["username"] == st.secrets["credentials"]["username"] and
+                    st.session_state["password"] == st.secrets["credentials"]["password"]):
+                    st.session_state["authenticated"] = True
+                    # Clear credentials from session state
+                    del st.session_state["password"]
+                    del st.session_state["username"]
+                    st.rerun()
+                else:
+                    st.session_state["authenticated"] = False
+
+    # Check if already authenticated
+    if st.session_state.get("authenticated"):
+        return True
+
+    # Show login form
+    login_form()
+
+    # Show error if login failed
+    if st.session_state.get("authenticated") == False:
+        st.error("❌ Invalid username or password")
+
+    return False
+
+
+# Check authentication before showing main app
+if not check_password():
+    st.stop()
+
+
+# --- Main Application (only shown after login) ---
+
 # Header
 st.title("📄 ISPRS Paper Formatting Analysis")
 st.markdown(
