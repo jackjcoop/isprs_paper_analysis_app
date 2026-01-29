@@ -18,6 +18,19 @@ class Severity(Enum):
 
 
 # ISPRS Requirements Constants
+FONT_SIZE_TOLERANCE = 0.5  # Allow ±0.5pt for PDF rendering differences
+
+# Known Times New Roman equivalents (PostScript / embedded font names)
+TIMES_FONT_ALIASES = [
+    'times',
+    'nimbusromno9l',   # URW++ Times Roman clone
+    'nimbusroman',     # URW++ alternate naming
+    'tinos',           # Google/Croscore Times equivalent
+    'thorndale',       # LibreOffice Times equivalent
+    'timesnewroman',   # No-space variant
+    'timesnewromps',   # PostScript variant
+]
+
 FONT_REQUIREMENTS = {
     'Title': {'size': 12, 'bold': True, 'centered': True},
     'Authors': {'size': 9, 'bold': False, 'centered': True},
@@ -706,6 +719,12 @@ class ComplianceValidator:
         remainder = size % 1
         return remainder == 0 or abs(remainder - 0.5) < 0.01
 
+    @staticmethod
+    def _font_is_times(font_name: str) -> bool:
+        """Check if a font name is Times New Roman or a known equivalent."""
+        normalized = re.sub(r'[\s\-_]', '', font_name).lower()
+        return any(alias in normalized for alias in TIMES_FONT_ALIASES)
+
     def _is_times_font(self, elem) -> bool:
         """
         Check if element uses Times font, accounting for mixed-font paragraphs.
@@ -720,10 +739,10 @@ class ComplianceValidator:
             for span in elem.spans:
                 # Access as object attributes, not dict keys
                 span_text = getattr(span, 'text', '') or ''
-                span_font = (getattr(span, 'font_name', '') or '').lower()
+                span_font = getattr(span, 'font_name', '') or ''
                 char_count = len(span_text)
                 total_chars += char_count
-                if 'times' in span_font:
+                if self._font_is_times(span_font):
                     times_chars += char_count
 
             if total_chars > 0:
@@ -732,7 +751,7 @@ class ComplianceValidator:
 
         # Fall back to element-level font_name
         if hasattr(elem, 'font_name') and elem.font_name:
-            return 'times' in elem.font_name.lower()
+            return self._font_is_times(elem.font_name)
 
         return True  # No font info, assume OK
 
@@ -884,9 +903,9 @@ class ComplianceValidator:
                 if hasattr(elem, 'page') and hasattr(elem, 'bbox'):
                     elem_ref = (elem.page, elem.bbox)
 
-                # Check font size - direct comparison, no tolerance
+                # Check font size - allow tolerance for PDF rendering differences
                 if hasattr(elem, 'font_size') and elem.font_size is not None:
-                    if elem.font_size != required_size:
+                    if abs(elem.font_size - required_size) > FONT_SIZE_TOLERANCE:
                         is_clean = self._is_clean_font_size(elem.font_size)
                         font_issues.append({
                             'type': elem_type,

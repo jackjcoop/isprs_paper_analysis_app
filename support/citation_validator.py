@@ -6,6 +6,7 @@ Optimized for ISPRS formatting and PDF extraction artifacts (newlines/hyphenatio
 
 import re
 import difflib
+import unicodedata
 from typing import Dict, List, Tuple, Optional, Any
 from dataclasses import dataclass, field
 
@@ -157,6 +158,74 @@ class CitationValidator:
         """Normalizes text by removing extra whitespace and newlines."""
         return ' '.join(text.split())
 
+    @staticmethod
+    def _normalize_name(name: str) -> str:
+        """Strip accents and normalize a name for comparison.
+        E.g., 'Cedeño' -> 'Cedeno', 'Müller' -> 'Muller'."""
+        nfkd = unicodedata.normalize('NFKD', name)
+        return ''.join(c for c in nfkd if not unicodedata.combining(c)).lower()
+
+    @staticmethod
+    def _fix_line_break_hyphens(text: str) -> str:
+        """Fix hyphens introduced by line breaks in PDF extraction.
+        E.g., 'Shah- mohamadi' -> 'Shahmohamadi'."""
+        return re.sub(r'(\w)- (\w)', r'\1\2', text)
+
+    def _split_multi_citations(self, citation_text: str) -> List[str]:
+        """Split a Document AI entity containing multiple citations into individual parts.
+
+        Handles:
+        - Semicolon-separated: 'Brauer et al., 2016; Castell et al., 2017'
+        - Comma-separated in parens: '(Griffin et al., 2019, Van Geffen et al., 2020)'
+        - Joined citations: '(Huang et al., 2023). Vavassori et al. (2024)'
+        """
+        normalized = ' '.join(citation_text.split())
+        normalized = self._fix_line_break_hyphens(normalized)
+
+        # Find all 4-digit years in the text
+        year_matches = list(re.finditer(r'\b(19|20)\d{2}[a-z]?\b', normalized))
+
+        if len(year_matches) <= 1:
+            # Single or no year — return as-is (single citation)
+            return [normalized]
+
+        # Multiple years found — split into individual citations
+        # For each year, find the author text preceding it
+        citations = []
+        for i, ym in enumerate(year_matches):
+            if i == 0:
+                start = 0
+            else:
+                # Start after the previous year; find the next capital letter
+                # (start of next author name)
+                prev_end = year_matches[i - 1].end()
+                remaining = normalized[prev_end:]
+                author_start = re.search(r'[A-ZÀ-ÖØ-Þ\u0100-\u024F]', remaining)
+                if author_start:
+                    start = prev_end + author_start.start()
+                else:
+                    start = prev_end
+
+            # End is after this year — include trailing ), ], . that belong to this citation
+            end = ym.end()
+            while end < len(normalized) and normalized[end] in ')].':
+                end += 1
+
+            cit_text = normalized[start:end].strip()
+            cit_text = cit_text.strip(';,. \t')
+            # Remove balanced outer parens: "(Smith, 2020)" → "Smith, 2020"
+            if cit_text.startswith('(') and cit_text.endswith(')'):
+                inner = cit_text[1:-1]
+                if inner.count('(') == inner.count(')'):
+                    cit_text = inner.strip(';,. \t')
+            # Strip unmatched leading paren: "(Smith, 2020" → "Smith, 2020"
+            if cit_text.startswith('(') and cit_text.count('(') > cit_text.count(')'):
+                cit_text = cit_text[1:].strip(';,. \t')
+            if cit_text:
+                citations.append(cit_text)
+
+        return citations if citations else [normalized]
+
     def _parse_citation_with_ner(self, citation_text: str) -> Tuple[str, Optional[str]]:
         """
         Parse citation using spaCy NER to handle varied formats.
@@ -225,6 +294,8 @@ class CitationValidator:
         ISPRS Format assumption: Author(s) (Year). Title...
         """
         cleaned_text = self._clean_text(reference_text)
+        # Fix line-break hyphens (e.g., "Houwel- ing" -> "Houweling")
+        cleaned_text = self._fix_line_break_hyphens(cleaned_text)
         issues = []
         is_valid = True
 
@@ -330,6 +401,8 @@ class CitationValidator:
         # Normalize whitespace (replace newlines with spaces) for pattern matching
         # This handles cases like "Cronk\net al, 2006" where text wraps across lines
         normalized_text = ' '.join(citation_text.split())
+        # Fix line-break hyphens (e.g., "Shah- mohamadi" -> "Shahmohamadi")
+        normalized_text = self._fix_line_break_hyphens(normalized_text)
 
         # Try NER first (handles all variable formats like "Smith described in 2020")
         if SPACY_AVAILABLE and _nlp:
@@ -413,6 +486,7 @@ class CitationValidator:
         best_suffix_match = False  # Track if we found an exact suffix match
 
         cit_surname_clean = citation.primary_surname.lower()
+        cit_surname_norm = self._normalize_name(citation.primary_surname)
 
         for ref in references:
             if not ref.year or not ref.primary_surname:
@@ -432,27 +506,36 @@ class CitationValidator:
                 suffix_match = True
             # else: one has suffix, other doesn't - can still match but lower priority
 
-            # 3. Surname Matching
+            # 3. Surname Matching (with accent normalization)
             ref_surname_clean = ref.primary_surname.lower()
+            ref_surname_norm = self._normalize_name(ref.primary_surname)
 
-            # Exact Match
+            # Exact Match (case-insensitive)
             if cit_surname_clean == ref_surname_clean:
+                score = 1.0
+            # Exact match after accent normalization (Cedeño == Cedeno)
+            elif cit_surname_norm == ref_surname_norm:
                 score = 1.0
             # Containment (e.g., "Van der Waal" vs "Waal")
             elif cit_surname_clean in ref_surname_clean or ref_surname_clean in cit_surname_clean:
                 score = 0.9
+            elif cit_surname_norm in ref_surname_norm or ref_surname_norm in cit_surname_norm:
+                score = 0.9
             # Fuzzy Match (SequenceMatcher) - handles OCR typos
             else:
-                score = difflib.SequenceMatcher(None, cit_surname_clean, ref_surname_clean).ratio()
+                # Use accent-normalized forms for fuzzy matching
+                score = difflib.SequenceMatcher(None, cit_surname_norm, ref_surname_norm).ratio()
 
             # 4. If primary match is weak, check ALL authors in reference
             if score < 0.85 and ref.all_authors:
                 for author in ref.all_authors:
                     author_clean = author.lower()
-                    if cit_surname_clean == author_clean:
+                    author_norm = self._normalize_name(author)
+                    if cit_surname_clean == author_clean or cit_surname_norm == author_norm:
                         score = max(score, 0.95)  # Slightly lower than exact primary
                         break
-                    elif cit_surname_clean in author_clean or author_clean in cit_surname_clean:
+                    elif (cit_surname_clean in author_clean or author_clean in cit_surname_clean
+                          or cit_surname_norm in author_norm or author_norm in cit_surname_norm):
                         score = max(score, 0.85)
                         break
 
@@ -480,6 +563,50 @@ class CitationValidator:
                 confidence=highest_score
             )
 
+        # Second pass: ±1 year tolerance with near-exact surname match
+        # Handles preprint-vs-published year discrepancies and author typos
+        best_fuzzy_match = None
+        best_fuzzy_score = 0.0
+
+        for ref in references:
+            if not ref.year or not ref.primary_surname:
+                continue
+
+            try:
+                year_diff = abs(int(ref.year) - int(citation.year))
+            except (ValueError, TypeError):
+                continue
+
+            if year_diff != 1:
+                continue
+
+            # Require near-exact surname match (>=0.95) for year-tolerant matching
+            ref_surname_norm = self._normalize_name(ref.primary_surname)
+
+            if cit_surname_clean == ref.primary_surname.lower() or cit_surname_norm == ref_surname_norm:
+                adj_score = 1.0 * 0.95  # Penalty for year mismatch
+            elif cit_surname_norm in ref_surname_norm or ref_surname_norm in cit_surname_norm:
+                adj_score = 0.9 * 0.95
+            else:
+                sim = difflib.SequenceMatcher(None, cit_surname_norm, ref_surname_norm).ratio()
+                if sim < 0.95:
+                    continue
+                adj_score = sim * 0.95
+
+            if adj_score > best_fuzzy_score:
+                best_fuzzy_score = adj_score
+                best_fuzzy_match = ref
+
+        if best_fuzzy_score >= 0.85 and best_fuzzy_match:
+            year_display = best_fuzzy_match.full_year or best_fuzzy_match.year
+            return CitationMatch(
+                citation=citation,
+                reference=best_fuzzy_match,
+                matched=True,
+                reason=f"Matched: {best_fuzzy_match.primary_surname} ({year_display}) (year ±1)",
+                confidence=best_fuzzy_score
+            )
+
         return CitationMatch(
             citation=citation,
             reference=None,
@@ -495,42 +622,49 @@ class CitationValidator:
     ) -> bool:
         """
         Search in main text for citation of a reference (fallback method).
-        Looks for first author name followed by year within reasonable proximity.
+        Looks for first author name (word-boundary match) followed by year
+        in a citation context (parenthetical, after comma, or after "et al.").
         """
         if not reference.primary_surname or not reference.year:
             return False
 
-        first_author = reference.primary_surname.lower().strip('.,;:')
+        first_author = reference.primary_surname.strip('.,;:')
         year = reference.year
+
+        # Word-boundary regex for author name (case-insensitive)
+        author_pattern = re.compile(r'\b' + re.escape(first_author) + r'\b', re.IGNORECASE)
+
+        # Citation-context regex for year — require it to appear in a citation pattern,
+        # not just as bare digits (avoids matching DOIs, page numbers, dates)
+        citation_year_pattern = re.compile(
+            r'(?:'
+            r'\(\s*' + re.escape(year) + r'[a-z]?\s*\)'              # (2011)
+            r'|'
+            r',\s*' + re.escape(year) + r'[a-z]?\s*[);\]]'           # , 2011) or , 2011;
+            r'|'
+            r'et\s+al\.?,?\s*\(?\s*' + re.escape(year) + r'[a-z]?\s*\)?'  # et al., 2011 or et al. (2011)
+            r')'
+        )
 
         # Search each main text element
         for element in main_text_elements:
             if not hasattr(element, 'text'):
                 continue
 
-            text = element.text.lower()
+            # Normalize text: fix line-break hyphens so "Shah- mohamadi" -> "Shahmohamadi"
+            text = self._fix_line_break_hyphens(element.text)
 
-            # Look for author name in text
-            if first_author in text:
-                # Find all positions of author name
-                author_positions = []
-                start = 0
-                while True:
-                    pos = text.find(first_author, start)
-                    if pos == -1:
-                        break
-                    author_positions.append(pos)
-                    start = pos + 1
+            # Look for author name with word boundaries
+            for author_match in author_pattern.finditer(text):
+                author_pos = author_match.start()
 
-                # For each author position, check if year appears nearby (within 50 chars)
-                for author_pos in author_positions:
-                    # Check ±50 characters around author name
-                    search_start = max(0, author_pos - 50)
-                    search_end = min(len(text), author_pos + len(first_author) + 50)
-                    nearby_text = text[search_start:search_end]
+                # Check ±50 characters around author name for year in citation context
+                search_start = max(0, author_pos - 50)
+                search_end = min(len(text), author_pos + len(first_author) + 50)
+                nearby_text = text[search_start:search_end]
 
-                    if year in nearby_text:
-                        return True
+                if citation_year_pattern.search(nearby_text):
+                    return True
 
         return False
 
@@ -640,12 +774,11 @@ class CitationValidator:
             # Check if this looks like a new reference (starts with author name)
             starts_new_ref = bool(new_ref_pattern.match(text))
 
-            # Also check if element has a year near the start (within first 100 chars)
-            # This helps identify actual reference starts vs. continuations
-            early_text = text[:100] if len(text) > 100 else text
-            has_early_year = bool(re.search(r'\b(19\d{2}|20\d{2})[a-z]?\b', early_text))
+            # Check if text contains a year anywhere (not limited to first N chars,
+            # because references with many authors can have the year 150+ chars in)
+            has_year = bool(re.search(r'\b(19\d{2}|20\d{2})[a-z]?\b', text))
 
-            if starts_new_ref and has_early_year:
+            if starts_new_ref and has_year:
                 # This is a new reference - save current and start fresh
                 if current_ref:
                     combined.append(CombinedRef(
@@ -705,6 +838,73 @@ class CitationValidator:
 
         return combined
 
+    def _split_merged_references(self, ref_elements, page_width=595):
+        """Split reference elements that contain multiple references
+        merged by Document AI into a single text block.
+
+        Document AI sometimes returns two or more bibliography entries as a
+        single text entity.  ``_combine_adjacent_references`` only *merges*
+        fragments — it never *splits* them.  This method detects the boundary
+        between merged entries (sentence-ending period followed by a new
+        ``Surname, I.`` pattern) and splits them into separate elements so
+        that ``parse_reference`` can extract each author-year independently.
+        """
+        # Pattern: sentence-ending period followed by "Surname, I."
+        split_boundary = re.compile(
+            r'(?<=\.)\s+'
+            r'(?=[A-Z\u00C0-\u024F][a-zA-Z\u00C0-\u024F\-\'\u2019]+,\s+[A-Z]\.)'
+        )
+
+        class SplitRef:
+            def __init__(self, text, page, bbox):
+                self.text = text
+                self.page = page
+                self.bbox = bbox
+
+        result = []
+        for elem in ref_elements:
+            cleaned = self._clean_text(elem.text)
+            cleaned = self._fix_line_break_hyphens(cleaned)
+
+            # Quick check: multiple years?
+            years = list(re.finditer(r'\b(19\d{2}|20\d{2})[a-z]?\b', cleaned))
+            if len(years) <= 1:
+                result.append(elem)
+                continue
+
+            # Find split points
+            splits = list(split_boundary.finditer(cleaned))
+            if not splits:
+                result.append(elem)
+                continue
+
+            # Validate: text after split must contain a year within 300 chars
+            valid_positions = []
+            for m in splits:
+                after = cleaned[m.end():m.end() + 300]
+                if re.search(r'\b(19\d{2}|20\d{2})\b', after):
+                    valid_positions.append(m.end())
+
+            if not valid_positions:
+                result.append(elem)
+                continue
+
+            # Split and create new elements
+            parts = []
+            start = 0
+            for pos in valid_positions:
+                parts.append(cleaned[start:pos].rstrip())
+                start = pos
+            parts.append(cleaned[start:].strip())
+
+            page = elem.page if hasattr(elem, 'page') else None
+            bbox = elem.bbox if hasattr(elem, 'bbox') else None
+            for part in parts:
+                if part:
+                    result.append(SplitRef(part, page, bbox))
+
+        return result
+
     def validate_citations_and_references(
         self,
         extracted_elements: Dict[str, List]
@@ -726,6 +926,8 @@ class CitationValidator:
 
         # Combine adjacent reference elements that were split by Document AI
         combined_refs = self._combine_adjacent_references(ref_elements)
+        # Split references that Document AI merged into a single text block
+        combined_refs = self._split_merged_references(combined_refs)
 
         for ref_elem in combined_refs:
             # Pass page and bbox for highlighting out-of-order references
@@ -742,27 +944,32 @@ class CitationValidator:
                     'bbox': parsed_ref.bbox
                 })
 
-        # 2. Parse Citations
+        # 2. Parse Citations — split multi-citation entities first
         cit_elements = extracted_elements.get('In_Text_Citations_References', [])
         for cit_elem in cit_elements:
-            parsed_cit = self.parse_citation(
-                cit_elem.text,
-                cit_elem.page,
-                cit_elem.bbox,
-                'reference'
-            )
-            results['citations_parsed'].append(parsed_cit)
+            # Split entities that contain multiple citations
+            # e.g., "(Griffin et al., 2019, Van Geffen et al., 2020)" -> 2 citations
+            individual_citations = self._split_multi_citations(cit_elem.text)
 
-            # 3. Match
-            match = self.match_citation_to_reference(parsed_cit, results['references_parsed'])
-            results['citation_matches'].append(match)
+            for cit_text in individual_citations:
+                parsed_cit = self.parse_citation(
+                    cit_text,
+                    cit_elem.page,
+                    cit_elem.bbox,
+                    'reference'
+                )
+                results['citations_parsed'].append(parsed_cit)
 
-            if not match.matched:
-                results['orphan_citations'].append({
-                    'text': parsed_cit.text,
-                    'page': parsed_cit.page,
-                    'reason': match.reason
-                })
+                # 3. Match
+                match = self.match_citation_to_reference(parsed_cit, results['references_parsed'])
+                results['citation_matches'].append(match)
+
+                if not match.matched:
+                    results['orphan_citations'].append({
+                        'text': parsed_cit.text,
+                        'page': parsed_cit.page,
+                        'reason': match.reason
+                    })
 
         # 4. Find Uncited References
         # Create a set of original texts of references that were matched
