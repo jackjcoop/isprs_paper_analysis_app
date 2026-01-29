@@ -59,6 +59,9 @@ class PDFComplianceAnalyzer:
     # Minimum vertical gap between references to trigger PyMuPDF scanning (points)
     MIN_GAP_HEIGHT = 18  # ~1.5 lines of 9pt reference text
 
+    # Minimum Document AI confidence to include an extracted element
+    MIN_CONFIDENCE = 0.6
+
     # Compiled regex patterns for heading classification
     SUB_SUB_HEADING_PATTERN = re.compile(r'^\d+\.\d+\.\d+\.?\s+')
     SUB_HEADING_PATTERN = re.compile(r'^\d+\.\d+\.?\s+')
@@ -296,6 +299,10 @@ class PDFComplianceAnalyzer:
                 enriched[element_type] = []
 
                 for element in elements:
+                    # Skip low-confidence elements from Document AI
+                    if element.confidence < self.MIN_CONFIDENCE:
+                        continue
+
                     enriched_element = extractor.enrich_element(
                         element_type=element_type,
                         text=element.text,
@@ -437,42 +444,54 @@ class PDFComplianceAnalyzer:
             if page_width == 0:
                 return (False, "", True)
 
-            # Define search region
+            # First check inside the content element's own bbox.
+            # Document AI sometimes returns a bbox that already covers the
+            # label (e.g. "Keywords" header included in the Keywords bbox).
+            # In that case searching outside the bbox would miss it.
+            regions_to_check = [
+                (x0, y0, x1, y1),  # inside the content bbox itself
+            ]
+
+            # Then check the directional region outside the bbox
             if direction == "left":
-                search_bbox = (max(0, x0 - search_margin), y0, x0, y1)
+                regions_to_check.append(
+                    (max(0, x0 - search_margin), y0, x0, y1)
+                )
             elif direction == "above":
-                search_bbox = (x0, max(0, y0 - search_margin), x1, y0)
-            else:
-                return (False, "", True)
-
-            # Extract text from search region
-            spans = extractor.extract_text_from_bbox(page, search_bbox)
-            text = ' '.join(s.text for s in spans).strip()
-
-            if not text:
-                return (False, "", True)
+                regions_to_check.append(
+                    (x0, max(0, y0 - search_margin), x1, y0)
+                )
 
             label_lower = label_text.lower()
-            text_lower = text.lower()
-
-            # Check for correct format (e.g., "Keywords", "Abstract")
-            if label_text in text or f"{label_text}:" in text:
-                return (True, label_text, True)
-
-            # Check for ALL CAPS (e.g., "KEYWORDS", "ABSTRACT")
             label_upper = label_text.upper()
-            if label_upper in text or f"{label_upper}:" in text:
-                return (True, label_upper, False)
 
-            # Check for any case variation
-            if label_lower in text_lower or f"{label_lower}:" in text_lower:
-                return (True, text_lower, False)
+            for search_bbox in regions_to_check:
+                spans = extractor.extract_text_from_bbox(page, search_bbox)
+                text = ' '.join(s.text for s in spans).strip()
 
-            # Check for "key words" / "key-words" variations
-            if label_lower == "keywords":
-                for pattern in ["key word", "key words", "key-word", "key-words"]:
-                    if pattern in text_lower:
-                        return (True, pattern, False)
+                if not text:
+                    continue
+
+                text_lower = text.lower()
+
+                # Check for correct format (e.g., "Keywords", "Abstract")
+                if label_text in text or f"{label_text}:" in text:
+                    return (True, label_text, True)
+
+                # Check for ALL CAPS (e.g., "KEYWORDS", "ABSTRACT")
+                if label_upper in text or f"{label_upper}:" in text:
+                    return (True, label_upper, False)
+
+                # Check for any case variation
+                if label_lower in text_lower or f"{label_lower}:" in text_lower:
+                    return (True, text_lower, False)
+
+                # Check for "key words" / "key-words" variations
+                if label_lower == "keywords":
+                    for pattern in ["key word", "key words", "key-word",
+                                    "key-words"]:
+                        if pattern in text_lower:
+                            return (True, pattern, False)
 
             return (False, "", True)
 

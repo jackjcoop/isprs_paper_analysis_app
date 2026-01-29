@@ -700,13 +700,15 @@ class CitationValidator:
 
     def _combine_adjacent_references(self, ref_elements: List, page_width: float = 595) -> List:
         """
-        Combines reference elements that were incorrectly split by Document AI
-        within the same column (intra-column fragment merging).
+        NOTE: No longer called from validate_citations_and_references().
+        Reference merging is handled upstream by main.py:
+        - _merge_partial_references() for Reference_Partial elements
+        - _merge_column_spanning_references() for References at column/page boundaries
+        - _detect_references_in_gaps() for missed references
+        Retained for potential future use.
 
-        This is complementary to main.py:_merge_partial_references(), which handles
-        cross-column and cross-page splits using Reference_Partial elements.
-        This method handles the simpler case where Document AI splits a single
-        reference into adjacent text blocks within the same column.
+        Original purpose: Combines reference elements that were incorrectly split
+        by Document AI within the same column (intra-column fragment merging).
 
         Document AI sometimes splits a single reference into multiple text blocks.
         This method detects fragments (text that doesn't start with an author-year pattern)
@@ -924,8 +926,10 @@ class CitationValidator:
         # 1. Parse References - first combine split references
         ref_elements = extracted_elements.get('References', [])
 
-        # Combine adjacent reference elements that were split by Document AI
-        combined_refs = self._combine_adjacent_references(ref_elements)
+        # Reference merging is handled upstream by main.py:
+        # - _merge_partial_references() for Reference_Partial elements
+        # - _merge_column_spanning_references() for References at column/page boundaries
+        combined_refs = ref_elements
         # Split references that Document AI merged into a single text block
         combined_refs = self._split_merged_references(combined_refs)
 

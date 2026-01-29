@@ -1546,9 +1546,7 @@ class ComplianceValidator:
                     self.bbox = parsed_ref.bbox  # Now includes bbox for highlighting
 
             references = [RefWrapper(r) for r in citation_results['references_parsed']]
-            # References from citation_results are already in reading order from
-            # _combine_adjacent_references(), so skip re-sorting
-            sorted_refs = references
+            sorted_refs = self._sort_by_column_flow(references, page_width)
         else:
             references = extracted_elements.get('References', [])
             if len(references) < 2:
