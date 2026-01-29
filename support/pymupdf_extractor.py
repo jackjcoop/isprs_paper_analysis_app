@@ -4,6 +4,7 @@ Extracts text with font metadata using bounding boxes from Document AI.
 """
 
 import fitz  # PyMuPDF
+fitz.TOOLS.mupdf_display_errors(False)
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, asdict
 
@@ -135,30 +136,34 @@ class PyMuPDFExtractor:
         if not spans:
             return None, None, None, None
 
-        # Count occurrences of each font characteristic
+        # Weight by text length so short superscripts don't dominate
         font_names = {}
         font_sizes = {}
-        bold_count = 0
-        italic_count = 0
+        bold_chars = 0
+        italic_chars = 0
+        total_chars = 0
 
         for span in spans:
-            # Count font names
-            font_names[span.font_name] = font_names.get(span.font_name, 0) + 1
+            weight = len(span.text)
+            total_chars += weight
 
-            # Count font sizes
-            font_sizes[span.font_size] = font_sizes.get(span.font_size, 0) + 1
+            # Weight font names by text length
+            font_names[span.font_name] = font_names.get(span.font_name, 0) + weight
 
-            # Count bold/italic
+            # Weight font sizes by text length
+            font_sizes[span.font_size] = font_sizes.get(span.font_size, 0) + weight
+
+            # Weight bold/italic by text length
             if span.is_bold:
-                bold_count += 1
+                bold_chars += weight
             if span.is_italic:
-                italic_count += 1
+                italic_chars += weight
 
         # Get dominant characteristics
         dominant_font_name = max(font_names, key=font_names.get) if font_names else None
         dominant_font_size = max(font_sizes, key=font_sizes.get) if font_sizes else None
-        is_bold = bold_count > len(spans) / 2
-        is_italic = italic_count > len(spans) / 2
+        is_bold = bold_chars > total_chars / 2
+        is_italic = italic_chars > total_chars / 2
 
         return dominant_font_name, dominant_font_size, is_bold, is_italic
 

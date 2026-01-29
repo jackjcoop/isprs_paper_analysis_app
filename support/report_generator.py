@@ -4,6 +4,7 @@ Generates annotated PDF reports with validation results and summary pages.
 """
 
 import fitz  # PyMuPDF
+fitz.TOOLS.mupdf_display_errors(False)
 from typing import Dict, List, Optional, Tuple
 from pathlib import Path
 from datetime import datetime
