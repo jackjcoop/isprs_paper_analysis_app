@@ -230,7 +230,7 @@ class ReportGenerator:
         if details:
             annotation_text += f"\n\nDetails: {details}"
 
-        # Position comment icon at top-right corner, outside the box
+        # Position note icon at top-right corner, outside the box
         comment_pos = fitz.Point(rect.x1 + 2, rect.y0)
         annot = page.add_text_annot(
             comment_pos,
@@ -273,33 +273,34 @@ class ReportGenerator:
         # Required Once elements
         for elem_type in ["Title", "Abstract", "Authors", "Affiliations", "Keywords"]:
             count = len(self.enriched_elements.get(elem_type, []))
-            status = "✓" if count == 1 else ("✗" if count == 0 else "⚠")
             color = COLOR_PASS if count == 1 else (COLOR_WARN if count > 1 else (0.8, 0, 0))
             elem_rows.append([
                 (elem_type, COLOR_DARK),
                 (str(count), COLOR_DARK),
-                (status, color)
+                ("", color)
             ])
 
         # Required Multiple elements
         for elem_type in ["Headings", "References", "Citations"]:
             key = "In_Text_Citations_References" if elem_type == "Citations" else elem_type
             count = len(self.enriched_elements.get(key, []))
-            status = "✓" if count > 0 else "✗"
             color = COLOR_PASS if count > 0 else (0.8, 0, 0)
             elem_rows.append([
                 (elem_type, COLOR_DARK),
                 (str(count), COLOR_DARK),
-                (status, color)
+                ("", color)
             ])
 
         # Optional elements (only show if present)
         optional_map = [
+            ("Abstract_title", "Abstract Title"),
+            ("Keywords_title", "Keywords Title"),
             ("Sub_Headings", "Sub-Headings"),
             ("Sub_sub_Headings", "Sub-sub-Headings"),
             ("Figures", "Figures"),
             ("Tables", "Tables"),
             ("Main_Text", "Main Text"),
+            ("Reference_Partial", "Partial References"),
         ]
         for key, label in optional_map:
             count = len(self.enriched_elements.get(key, []))
@@ -307,17 +308,18 @@ class ReportGenerator:
                 elem_rows.append([
                     (label, COLOR_GRAY),
                     (str(count), COLOR_GRAY),
-                    ("○", COLOR_GRAY)
+                    ("", COLOR_GRAY)
                 ])
 
         page, y_pos = self._draw_table(
             doc=summary_doc,
             page=page,
             y=y_pos,
-            headers=["Element", "Count", "Status"],
+            headers=["Element", "Count", ""],
             rows=elem_rows,
-            col_widths=[200, 60, 60],
-            title="Extracted Elements"
+            col_widths=[225, 60, 35],
+            title="Extracted Elements",
+            col_align=['left', 'center', 'status']
         )
 
         y_pos += 10
@@ -327,17 +329,16 @@ class ReportGenerator:
 
         # Add all validation results
         for result in self.validation_results:
-            status = "✓" if result.passed else "⚠"
             status_color = COLOR_PASS if result.passed else COLOR_WARN
 
-            # Get detail text (message or truncated details)
+            # Get detail text (full message for failed checks)
             detail = result.message if not result.passed else ""
-            if len(detail) > 50:
-                detail = detail[:47] + "..."
+            if not result.passed and result.details:
+                detail = result.details
 
             validation_rows.append([
                 (result.check_name, COLOR_DARK),
-                (status, status_color),
+                ("", status_color),
                 (detail, COLOR_GRAY if result.passed else COLOR_DARK)
             ])
 
@@ -345,10 +346,11 @@ class ReportGenerator:
             doc=summary_doc,
             page=page,
             y=y_pos,
-            headers=["Check", "Status", "Details"],
+            headers=["Check", "", "Details"],
             rows=validation_rows,
-            col_widths=[180, 50, 285],
-            title="Validation Results"
+            col_widths=[180, 35, 300],
+            title="Validation Results",
+            col_align=['left', 'status', 'left']
         )
 
         # Check if we need a new page for manual reminders
@@ -497,6 +499,45 @@ class ReportGenerator:
 
         return y + box_height + 15
 
+    def _wrap_text(self, text: str, max_chars: int) -> List[str]:
+        """
+        Wrap text into lines that fit within max_chars.
+
+        Breaks on word boundaries where possible. Normalizes embedded
+        newlines to spaces so insert_text renders single-line segments.
+
+        Args:
+            text: Text to wrap
+            max_chars: Maximum characters per line
+
+        Returns:
+            List of lines
+        """
+        # Normalize newlines and collapse whitespace so insert_text
+        # doesn't produce unaccounted-for extra lines
+        text = ' '.join(text.split())
+
+        if len(text) <= max_chars:
+            return [text]
+
+        lines = []
+        remaining = text
+        while remaining:
+            if len(remaining) <= max_chars:
+                lines.append(remaining)
+                break
+            # Find last space or semicolon within limit for a clean break
+            break_at = max_chars
+            for sep in ['; ', ' ', ',']:
+                pos = remaining.rfind(sep, 0, max_chars + 1)
+                if pos > 0:
+                    break_at = pos + len(sep)
+                    break
+            lines.append(remaining[:break_at].rstrip())
+            remaining = remaining[break_at:].lstrip()
+
+        return lines
+
     def _draw_table(
         self,
         doc: fitz.Document,
@@ -505,10 +546,12 @@ class ReportGenerator:
         headers: List[str],
         rows: List[List[Tuple[str, Tuple[float, float, float]]]],
         col_widths: List[float],
-        title: str = None
+        title: str = None,
+        col_align: Optional[List[str]] = None
     ) -> Tuple[fitz.Page, float]:
         """
         Draw a table with headers and rows, handling page breaks.
+        Supports text wrapping with dynamic row heights.
 
         Args:
             doc: PyMuPDF document object (needed to create new pages)
@@ -518,12 +561,18 @@ class ReportGenerator:
             rows: List of rows, each row is list of (text, color) tuples
             col_widths: List of column widths in points
             title: Optional section title above table
+            col_align: Optional list of alignments per column ('left' or 'center')
 
         Returns:
             Tuple of (current page, new y position after the table)
         """
+        if col_align is None:
+            col_align = ['left'] * len(col_widths)
         x = MARGIN
         table_width = sum(col_widths)
+        line_height = 12  # Height per line of text within a cell
+        cell_padding_top = 4  # Padding above first line
+        cell_padding_bottom = 3  # Padding below last line
 
         # Draw title if provided
         if title:
@@ -542,8 +591,13 @@ class ReportGenerator:
             p.draw_rect(header_rect, color=TABLE_BORDER_COLOR, fill=TABLE_HEADER_BG, width=0.5)
             curr_x = x
             for i, header in enumerate(headers):
+                if col_align[i] == 'center':
+                    hw = fitz.get_text_length(header, fontname="hebo", fontsize=9)
+                    hx = curr_x + (col_widths[i] - hw) / 2
+                else:
+                    hx = curr_x + 8
                 p.insert_text(
-                    (curr_x + 8, y_pos + 15),
+                    (hx, y_pos + 15),
                     header,
                     fontsize=9,
                     fontname="hebo",
@@ -561,8 +615,19 @@ class ReportGenerator:
 
         # Draw data rows
         for row_idx, row in enumerate(rows):
+            # Calculate row height based on text wrapping
+            max_lines = 1
+            wrapped_cells = []
+            for i, (text, color) in enumerate(row):
+                max_chars = int((col_widths[i] - 16) / 5.5)  # Usable width (minus padding) / avg char width
+                lines = self._wrap_text(text, max_chars)
+                wrapped_cells.append((lines, color))
+                max_lines = max(max_lines, len(lines))
+
+            row_height = cell_padding_top + (max_lines * line_height) + cell_padding_bottom
+
             # Check if row would exceed page bounds
-            if y + TABLE_ROW_HEIGHT > PAGE_HEIGHT - MARGIN:
+            if y + row_height > PAGE_HEIGHT - MARGIN:
                 # Draw column separators for current page before moving to new page
                 curr_x = x
                 for width in col_widths[:-1]:
@@ -580,7 +645,7 @@ class ReportGenerator:
                 current_header_y = y
                 y = draw_headers(page, y)
 
-            row_rect = fitz.Rect(x, y, x + table_width, y + TABLE_ROW_HEIGHT)
+            row_rect = fitz.Rect(x, y, x + table_width, y + row_height)
 
             # Alternating row background
             if row_idx % 2 == 1:
@@ -589,23 +654,58 @@ class ReportGenerator:
             # Draw row border
             page.draw_rect(row_rect, color=TABLE_BORDER_COLOR, fill=None, width=0.5)
 
-            # Draw cell text
+            # Draw cell text (with wrapping)
             curr_x = x
-            for i, (text, color) in enumerate(row):
-                # Truncate text if too long
-                max_chars = int(col_widths[i] / 5)  # Approximate chars that fit
-                display_text = text[:max_chars] + "..." if len(text) > max_chars else text
+            for i, (lines, color) in enumerate(wrapped_cells):
+                if col_align[i] == 'status':
+                    # Fill entire cell with the status color
+                    inset = 3  # Small inset so fill doesn't touch row border
+                    status_rect = fitz.Rect(
+                        curr_x + inset, y + inset,
+                        curr_x + col_widths[i] - inset, y + row_height - inset
+                    )
+                    page.draw_rect(status_rect, color=None, fill=color, width=0)
 
-                page.insert_text(
-                    (curr_x + 8, y + 13),
-                    display_text,
-                    fontsize=9,
-                    fontname="helv",
-                    color=color
-                )
+                    # Draw symbol in white, centered
+                    status_text = lines[0] if lines else ""
+                    if status_text:
+                        sym_size = 11
+                        text_w = fitz.get_text_length(status_text, fontname="hebo", fontsize=sym_size)
+                        text_x = curr_x + (col_widths[i] - text_w) / 2
+                        text_y = y + row_height / 2 + sym_size * 0.35
+                        page.insert_text(
+                            (text_x, text_y),
+                            status_text,
+                            fontsize=sym_size,
+                            fontname="hebo",
+                            color=(1, 1, 1)
+                        )
+                elif col_align[i] == 'center':
+                    for line_idx, line_text in enumerate(lines):
+                        center_fontsize = 9
+                        text_w = fitz.get_text_length(line_text, fontname="helv", fontsize=center_fontsize)
+                        text_x = curr_x + (col_widths[i] - text_w) / 2
+                        text_y = y + cell_padding_top + ((line_idx + 1) * line_height)
+                        page.insert_text(
+                            (text_x, text_y),
+                            line_text,
+                            fontsize=center_fontsize,
+                            fontname="helv",
+                            color=color
+                        )
+                else:
+                    for line_idx, line_text in enumerate(lines):
+                        text_y = y + cell_padding_top + ((line_idx + 1) * line_height)
+                        page.insert_text(
+                            (curr_x + 8, text_y),
+                            line_text,
+                            fontsize=9,
+                            fontname="helv",
+                            color=color
+                        )
                 curr_x += col_widths[i]
 
-            y += TABLE_ROW_HEIGHT
+            y += row_height
 
         # Draw vertical column separators for final page
         curr_x = x

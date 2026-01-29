@@ -87,12 +87,18 @@ class CitationValidator:
     # Regex components - captures optional letter suffix (2019a, 2019b, etc.)
     YEAR_PATTERN = r'\b(19\d{2}|20\d{2})([a-z])?\b'
 
+    # Unicode character classes for author names:
+    #   _CAP = uppercase Latin (ASCII + Latin-1 Supplement + Latin Extended-A/B)
+    #   _LET = any Latin letter (upper or lower, including extended)
+    _CAP = r'A-ZÀ-ÖØ-Þ\u0100-\u024F'
+    _LET = r'a-zA-ZÀ-ÖØ-öø-ÿ\u0100-\u024F'
+
     # 1. (Author, Year) or (Author & Author, Year) or (Author et al., Year)
     # Handles newlines (\s includes \n)
     PARENTHETICAL_PATTERN = re.compile(
         r'\('                                       # Open paren
-        r'(?P<author>[A-ZÀ-ÖØ-Þ][a-zA-ZÀ-ÖØ-öø-ÿ\-\s]+)'           # Author name (Starts with Cap, Unicode support)
-        r'(?:et al\.?|& [A-ZÀ-ÖØ-Þ][a-zA-ZÀ-ÖØ-öø-ÿ\-]+|and [A-ZÀ-ÖØ-Þ][a-zA-ZÀ-ÖØ-öø-ÿ\-]+)?' # Optional: et al, & Author
+        r'(?P<author>[' + _CAP + r'][' + _LET + r'\-\s]+)'           # Author name (Starts with Cap, Unicode support)
+        r'(?:et al\.?|& [' + _CAP + r'][' + _LET + r'\-]+|and [' + _CAP + r'][' + _LET + r'\-]+)?' # Optional: et al, & Author
         r',?\s+'                                    # Comma/Space
         r'(?P<year>19\d{2}|20\d{2})'                # Year
         r'(?:[a-z])?'                               # Optional year suffix (2020a)
@@ -102,8 +108,8 @@ class CitationValidator:
 
     # 2. Author (Year) - Narrative citation
     NARRATIVE_PATTERN = re.compile(
-        r'\b(?P<author>[A-ZÀ-ÖØ-Þ][a-zA-ZÀ-ÖØ-öø-ÿ\-]+)'           # Author name (Unicode support)
-        r'(?:\s+et al\.?|\s+and\s+[A-ZÀ-ÖØ-Þ][a-zA-ZÀ-ÖØ-öø-ÿ\-]+|\s*&\s*[A-ZÀ-ÖØ-Þ][a-zA-ZÀ-ÖØ-öø-ÿ\-]+)?' # et al modifiers
+        r'\b(?P<author>[' + _CAP + r'][' + _LET + r'\-]+)'           # Author name (Unicode support)
+        r'(?:\s+et al\.?|\s+and\s+[' + _CAP + r'][' + _LET + r'\-]+|\s*&\s*[' + _CAP + r'][' + _LET + r'\-]+)?' # et al modifiers
         r'\s*\('                                    # Open paren
         r'(?P<year>19\d{2}|20\d{2})'                # Year
         r'(?:[a-z])?'                               # Optional year suffix
@@ -113,7 +119,7 @@ class CitationValidator:
 
     # 3. "Author et al., Year" - Simple format without parentheses
     SIMPLE_ET_AL_PATTERN = re.compile(
-        r'\b(?P<author>[A-ZÀ-ÖØ-Þ][a-zA-ZÀ-ÖØ-öø-ÿ\-]+)'           # Author name (Unicode support)
+        r'\b(?P<author>[' + _CAP + r'][' + _LET + r'\-]+)'           # Author name (Unicode support)
         r'\s+et al\.?,\s*'                          # et al., or et al, (period optional)
         r'(?P<year>19\d{2}|20\d{2})'                # Year
         r'(?:[a-z])?'                               # Optional year suffix
@@ -121,7 +127,7 @@ class CitationValidator:
 
     # 3b. "Author et al., (Year)" - et al. with parentheses around year
     SIMPLE_ET_AL_PAREN_PATTERN = re.compile(
-        r'\b(?P<author>[A-ZÀ-ÖØ-Þ][a-zA-ZÀ-ÖØ-öø-ÿ\-]+)'           # Author name (Unicode support)
+        r'\b(?P<author>[' + _CAP + r'][' + _LET + r'\-]+)'           # Author name (Unicode support)
         r'\s+et al\.?,\s*\('                        # et al., ( or et al, ( (period optional)
         r'(?P<year>19\d{2}|20\d{2})'                # Year
         r'(?:[a-z])?\)'                             # Optional year suffix and )
@@ -129,7 +135,7 @@ class CitationValidator:
 
     # 4. "Author, Year" - Simple comma-separated format
     SIMPLE_COMMA_PATTERN = re.compile(
-        r'\b(?P<author>[A-ZÀ-ÖØ-Þ][a-zA-ZÀ-ÖØ-öø-ÿ\-]+)'           # Author name (Unicode support)
+        r'\b(?P<author>[' + _CAP + r'][' + _LET + r'\-]+)'           # Author name (Unicode support)
         r',\s*'                                     # Comma
         r'(?P<year>19\d{2}|20\d{2})'                # Year
         r'(?:[a-z])?'                               # Optional year suffix
@@ -137,8 +143,8 @@ class CitationValidator:
 
     # 5. "Author and Author, Year" or "Author & Author, Year" - Two authors without parentheses
     SIMPLE_TWO_AUTHORS_PATTERN = re.compile(
-        r'\b(?P<author>[A-ZÀ-ÖØ-Þ][a-zA-ZÀ-ÖØ-öø-ÿ\-]+)'           # First author (Unicode support)
-        r'\s+(?:and|&)\s+[A-ZÀ-ÖØ-Þ][a-zA-ZÀ-ÖØ-öø-ÿ\-]+,\s*'      # and/& Second author,
+        r'\b(?P<author>[' + _CAP + r'][' + _LET + r'\-]+)'           # First author (Unicode support)
+        r'\s+(?:and|&)\s+[' + _CAP + r'][' + _LET + r'\-]+,\s*'      # and/& Second author,
         r'(?P<year>19\d{2}|20\d{2})'                # Year
         r'(?:[a-z])?'                               # Optional year suffix
     )
@@ -264,7 +270,7 @@ class CitationValidator:
             # 3. Extract all authors
             # Pattern matches surnames including those with mid-word capitals (e.g., "McLeod", "O'Brien")
             # Matches: Capital letter followed by any letters, apostrophes, or hyphens
-            surname_pattern = re.compile(r'\b([A-Z][a-zA-Z\'\-]+)\b')
+            surname_pattern = re.compile(r'\b([A-Z\u00C0-\u024F][a-zA-Z\u00C0-\u024F\'\-]+)\b')
             all_authors = surname_pattern.findall(author_segment)
             # Filter out single-letter initials (e.g., "G", "R", "S")
             all_authors = [a for a in all_authors if len(a) > 1]
@@ -560,7 +566,13 @@ class CitationValidator:
 
     def _combine_adjacent_references(self, ref_elements: List, page_width: float = 595) -> List:
         """
-        Combines reference elements that were incorrectly split by Document AI.
+        Combines reference elements that were incorrectly split by Document AI
+        within the same column (intra-column fragment merging).
+
+        This is complementary to main.py:_merge_partial_references(), which handles
+        cross-column and cross-page splits using Reference_Partial elements.
+        This method handles the simpler case where Document AI splits a single
+        reference into adjacent text blocks within the same column.
 
         Document AI sometimes splits a single reference into multiple text blocks.
         This method detects fragments (text that doesn't start with an author-year pattern)
@@ -604,7 +616,7 @@ class CitationValidator:
         # Key: must start with capital letter and have a year within first ~100 chars
         # Includes extended Latin characters for European names (Pöntinen, Müller, etc.)
         new_ref_pattern = re.compile(
-            r'^[A-ZÀ-ÖØ-Þ][a-zA-ZÀ-ÖØ-öø-ÿ\-\'\u2019]+,?\s',  # Starts with capital letter surname
+            r'^[A-Z\u00C0-\u024F][a-zA-Z\u00C0-\u024F\-\'\u2019]+,?\s',  # Starts with capital letter surname
             re.UNICODE
         )
 

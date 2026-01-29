@@ -53,3 +53,5 @@ Thumbs.db
 
 # Converted documents
 *.pdf.converted
+/tests
+/documents

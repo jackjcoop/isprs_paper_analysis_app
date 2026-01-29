@@ -132,6 +132,7 @@ class DocumentAIClient:
         """
         elements_by_type = {
             "Abstract": [],
+            "Abstract_title": [],
             "Affiliations": [],
             "Authors": [],
             "Equation": [],
@@ -143,6 +144,7 @@ class DocumentAIClient:
             "In_Text_Citations_References": [],
             "In_Text_Citations_Tables": [],
             "Keywords": [],
+            "Keywords_title": [],
             "Main_Text": [],
             "References": [],
             "Sub_Headings": [],
@@ -150,7 +152,8 @@ class DocumentAIClient:
             "Table": [],
             "Table_Number": [],
             "Table_Title": [],
-            "Title": []
+            "Title": [],
+            "Reference_Partial": []
         }
 
         # Extract from document entities
@@ -169,46 +172,6 @@ class DocumentAIClient:
                         confidence=entity.confidence
                     )
                     elements_by_type[entity_type].append(element)
-
-        # Collect all entity texts to avoid duplicating in Main_Text
-        entity_texts = set()
-        for element_type, elements in elements_by_type.items():
-            if element_type != 'Main_Text':
-                for elem in elements:
-                    entity_texts.add(elem.text.strip().lower())
-
-        # Also extract from pages/blocks for more granular control
-        for page_idx, page in enumerate(document.pages):
-            # Extract paragraphs
-            for paragraph in page.paragraphs:
-                text = self._get_text_from_layout(paragraph.layout, document)
-                if not text:
-                    continue
-
-                # Skip if this text already exists as an entity (prevents duplicates)
-                text_normalized = text.strip().lower()
-                if text_normalized in entity_texts:
-                    continue
-
-                bbox = self._get_bbox_from_layout(paragraph.layout, page_idx)
-                if bbox:
-                    # Heuristic classification - you may need to adjust
-                    element = ExtractedElement(
-                        element_type="Main_Text",
-                        text=text,
-                        bbox=bbox
-                    )
-                    elements_by_type["Main_Text"].append(element)
-
-            # Extract lines (for more granular bounding boxes)
-            for line in page.lines:
-                text = self._get_text_from_layout(line.layout, document)
-                bbox = self._get_bbox_from_layout(line.layout, page_idx)
-
-                if text and bbox:
-                    # Store as potential heading/subheading candidates
-                    # Will be refined by PyMuPDF extractor
-                    pass  # Handled in paragraph extraction
 
         return elements_by_type
 
@@ -269,51 +232,3 @@ class DocumentAIClient:
             page=page_num
         )
 
-    def _get_text_from_layout(
-        self,
-        layout: documentai.Document.Page.Layout,
-        document: documentai.Document
-    ) -> str:
-        """Extract text content from layout object."""
-        text_anchor = layout.text_anchor
-        if not text_anchor or not text_anchor.text_segments:
-            return ""
-
-        text_segments = []
-        for segment in text_anchor.text_segments:
-            start_index = int(segment.start_index) if segment.start_index else 0
-            end_index = int(segment.end_index) if segment.end_index else 0
-            text_segments.append(document.text[start_index:end_index])
-
-        return "".join(text_segments)
-
-    def get_all_blocks(
-        self,
-        document: documentai.Document
-    ) -> List[ExtractedElement]:
-        """
-        Get all text blocks with bounding boxes for PyMuPDF processing.
-
-        Args:
-            document: Processed document from Document AI
-
-        Returns:
-            List of all extracted elements with bounding boxes
-        """
-        all_blocks = []
-
-        for page_idx, page in enumerate(document.pages):
-            # Extract all paragraphs
-            for paragraph in page.paragraphs:
-                text = self._get_text_from_layout(paragraph.layout, document)
-                bbox = self._get_bbox_from_layout(paragraph.layout, page_idx)
-
-                if text and bbox:
-                    element = ExtractedElement(
-                        element_type="block",
-                        text=text,
-                        bbox=bbox
-                    )
-                    all_blocks.append(element)
-
-        return all_blocks

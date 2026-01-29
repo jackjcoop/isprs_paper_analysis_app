@@ -208,10 +208,12 @@ class OutputGenerator:
         # Optional (if found)
         lines.append("\nOptional Elements Found:")
         optional_types = [
+            "Abstract_title", "Keywords_title",
             "Sub_Headings", "Sub_sub_Headings", "Main_Text",
             "Figure_Number", "Figure_Title", "Table_Number", "Table_Title",
             "Equation", "Equation_Number",
-            "In_Text_Citations_Figures", "In_Text_Citations_Tables", "Table"
+            "In_Text_Citations_Figures", "In_Text_Citations_Tables", "Table",
+            "Reference_Partial"
         ]
         for elem_type in optional_types:
             count = len(extracted_elements.get(elem_type, []))

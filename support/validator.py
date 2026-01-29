@@ -29,6 +29,8 @@ FONT_REQUIREMENTS = {
     'Sub_Headings': {'size': 9, 'bold': True, 'centered': False},
     'Sub_sub_Headings': {'size': 9, 'bold': True, 'centered': False},
     'References': {'size': 9, 'bold': False, 'centered': False},
+    'Figure_Title': {'size': 9, 'bold': False, 'centered': True},
+    'Table_Title': {'size': 9, 'bold': False, 'centered': True},
 }
 
 PAGE_REQUIREMENTS = {
@@ -88,18 +90,21 @@ class ComplianceValidator:
     ]
 
     OPTIONAL_MULTIPLE = [
+        "Abstract_title",
         "Equation",
         "Equation_Number",
         "Figure_Number",
         "Figure_Title",
         "In_Text_Citations_Figures",
         "In_Text_Citations_Tables",
+        "Keywords_title",
         "Main_Text",
         "Sub_Headings",
         "Sub_sub_Headings",
         "Table",
         "Table_Number",
-        "Table_Title"
+        "Table_Title",
+        "Reference_Partial"
     ]
 
     def __init__(self):
@@ -321,21 +326,26 @@ class ComplianceValidator:
         # Check for invalid references
         invalid_refs = citation_results.get('invalid_references', [])
         if invalid_refs:
+            # Build element_refs for per-instance PDF annotations
+            element_refs = []
             for ref in invalid_refs:
-                # Build element_refs for PDF annotation if page/bbox available
-                element_refs = None
                 if ref.get('page') is not None and ref.get('bbox'):
                     instance_msg = f"Invalid format: {', '.join(ref['issues'])}"
-                    element_refs = [(ref['page'], ref['bbox'], instance_msg)]
+                    element_refs.append((ref['page'], ref['bbox'], instance_msg))
 
-                self.results.append(ValidationResult(
-                    check_name="Reference Format Validation",
-                    passed=False,
-                    severity=Severity.WARNING,
-                    message=f"Invalid reference format detected",
-                    details=f"{ref['text']}\nIssues: {', '.join(ref['issues'])}",
-                    element_refs=element_refs
-                ))
+            # Collect unique issues across all invalid references
+            all_issues = set()
+            for ref in invalid_refs:
+                all_issues.update(ref['issues'])
+
+            self.results.append(ValidationResult(
+                check_name="Reference Format Validation",
+                passed=False,
+                severity=Severity.WARNING,
+                message=f"Found {len(invalid_refs)} reference(s) with invalid format",
+                details=f"Issues: {'; '.join(sorted(all_issues))}",
+                element_refs=element_refs if element_refs else None
+            ))
 
         # Check for orphan citations
         orphan_citations = citation_results.get('orphan_citations', [])
@@ -350,17 +360,18 @@ class ComplianceValidator:
                     instance_msg = f"Citation '{parsed_cit.text}' has no matching reference in bibliography"
                     element_refs.append((parsed_cit.page, parsed_cit.bbox, instance_msg))
 
+            orphan_list = '; '.join(c['text'] for c in orphan_citations)
             self.results.append(ValidationResult(
-                check_name="Citation-Reference Matching",
+                check_name="Orphaned Citations",
                 passed=False,
                 severity=Severity.WARNING,
                 message=f"Found {len(orphan_citations)} citation(s) without matching reference",
-                details=f"Examples: {', '.join(c['text'] for c in orphan_citations[:3])}",
+                details=f"Unmatched citations: {orphan_list}",
                 element_refs=element_refs if element_refs else None
             ))
         else:
             self.results.append(ValidationResult(
-                check_name="Citation-Reference Matching",
+                check_name="Orphaned Citations",
                 passed=True,
                 severity=Severity.SUCCESS,
                 message="All citations have matching references",
@@ -377,17 +388,26 @@ class ComplianceValidator:
                     instance_msg = f"Reference '{ref.get('authors', 'Unknown')} ({ref.get('year', '?')})' has no in-text citation"
                     element_refs.append((ref['page'], ref['bbox'], instance_msg))
 
+            def _short_ref(r):
+                author = r.get('authors', 'Unknown')
+                # Truncate long author fields (e.g., from numbered-format references)
+                if len(author) > 25:
+                    author = author[:25].rsplit(' ', 1)[0] + '...'
+                year = str(r.get('year', '?'))
+                return f"{author} ({year})"
+
+            uncited_list = '; '.join(_short_ref(r) for r in uncited_refs)
             self.results.append(ValidationResult(
-                check_name="Reference Citation Coverage",
+                check_name="Uncited Sources",
                 passed=False,
                 severity=Severity.WARNING,
                 message=f"Found {len(uncited_refs)} reference(s) without citations",
-                details=f"Examples: {', '.join(r.get('authors', 'Unknown') + ' (' + str(r.get('year', '?')) + ')' for r in uncited_refs[:3])}",
+                details=f"Uncited: {uncited_list}",
                 element_refs=element_refs if element_refs else None
             ))
         else:
             self.results.append(ValidationResult(
-                check_name="Reference Citation Coverage",
+                check_name="Uncited Sources",
                 passed=True,
                 severity=Severity.SUCCESS,
                 message="All references are cited in text",
@@ -422,12 +442,13 @@ class ComplianceValidator:
                     instance_msg = f"{float_type} {f['number']} - no in-text citation found"
                     element_refs.append((f['page'], highlight_bbox, instance_msg))
 
+            uncited_list = ', '.join(f"{float_type} {f['number']}" for f in uncited)
             self.results.append(ValidationResult(
                 check_name=f"{float_type} Citation Coverage",
                 passed=False,
                 severity=Severity.WARNING,
-                message=f"Found {len(uncited)} {float_type.lower()}(s) without citations",
-                details=f"{float_type}s: {', '.join(str(f['number']) for f in uncited)}",
+                message=f"Found {len(uncited)} {float_type.lower()}(s) without in-text citation",
+                details=f"Uncited: {uncited_list}",
                 element_refs=element_refs if element_refs else None
             ))
         elif validation.get(float_type.lower() + 's', []):
@@ -449,12 +470,15 @@ class ComplianceValidator:
                     instance_msg = f"'{f['text']}' - no corresponding {float_type.lower()} found"
                     element_refs.append((f['page'], f['bbox'], instance_msg))
 
+            # Deduplicate by number (same figure/table cited multiple times)
+            unique_numbers = sorted(set(f['number'] for f in orphan), key=str)
+            orphan_list = ', '.join(f"{float_type} {n}" for n in unique_numbers)
             self.results.append(ValidationResult(
                 check_name=f"{float_type} Citation Validity",
                 passed=False,
                 severity=Severity.WARNING,
-                message=f"Found {len(orphan)} citation(s) to non-existent {float_type.lower()}s",
-                details=f"{float_type}s: {', '.join(str(f['number']) for f in orphan)}",
+                message=f"Found {len(unique_numbers)} citation(s) to non-existent {float_type.lower()}s",
+                details=f"No matching {float_type.lower()}: {orphan_list}",
                 element_refs=element_refs if element_refs else None
             ))
 
@@ -1023,7 +1047,7 @@ class ComplianceValidator:
         # Element types to check (excludes Equation, Equation_Number)
         check_types = ['Title', 'Authors', 'Affiliations', 'Keywords', 'Abstract',
                        'Main_Text', 'Headings', 'Sub_Headings', 'Sub_sub_Headings',
-                       'References']
+                       'References', 'Figure_Title', 'Table_Title']
 
         for elem_type in check_types:
             for elem in extracted_elements.get(elem_type, []):
@@ -1178,6 +1202,45 @@ class ComplianceValidator:
                     severity=Severity.SUCCESS,
                     message="Heading numbering sequence is correct",
                     details=f"Found headings: {heading_nums_sorted}"
+                ))
+
+        # Check sub-heading numbering sequence
+        sub_heading_nums = []
+        sub_heading_pattern = re.compile(r'^(\d+)\.(\d+)\.?\s+')
+        for sh in sub_headings:
+            match = sub_heading_pattern.match(sh.text.strip())
+            if match:
+                sub_heading_nums.append((int(match.group(1)), int(match.group(2))))
+
+        if sub_heading_nums:
+            # Group by parent heading number
+            by_parent = {}
+            for parent, child in sub_heading_nums:
+                by_parent.setdefault(parent, []).append(child)
+
+            missing_subs = []
+            for parent, children in sorted(by_parent.items()):
+                children_sorted = sorted(set(children))
+                expected_children = list(range(1, max(children_sorted) + 1))
+                for c in expected_children:
+                    if c not in children_sorted:
+                        missing_subs.append(f"{parent}.{c}")
+
+            if missing_subs:
+                self.results.append(ValidationResult(
+                    check_name="Sub-heading Numbering",
+                    passed=False,
+                    severity=Severity.WARNING,
+                    message=f"Missing sub-heading number(s): {', '.join(missing_subs)}",
+                    details=f"Found sub-headings: {sorted(set(sub_heading_nums))}"
+                ))
+            else:
+                self.results.append(ValidationResult(
+                    check_name="Sub-heading Numbering",
+                    passed=True,
+                    severity=Severity.SUCCESS,
+                    message="Sub-heading numbering sequences are correct",
+                    details=f"Found sub-headings: {sorted(set(sub_heading_nums))}"
                 ))
 
         # Check heading case (should not be ALL CAPS)
