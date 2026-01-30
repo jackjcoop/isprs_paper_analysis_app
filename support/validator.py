@@ -1881,7 +1881,10 @@ class ComplianceValidator:
             ))
 
     def _check_section_spacing(self, extracted_elements: Dict[str, List]):
-        """Check vertical spacing between sections per ISPRS requirements."""
+        """Check vertical spacing between sections per ISPRS requirements.
+
+        Highlights the gap region between sections that are too close together.
+        """
         # Sort all relevant elements by page and y-position
         section_elements = []
         section_types = ['Title', 'Authors', 'Affiliations', 'Keywords', 'Abstract', 'Headings']
@@ -1898,6 +1901,8 @@ class ComplianceValidator:
         section_elements.sort(key=lambda x: (x[1].page, x[1].bbox[1]))
 
         spacing_issues = []
+        element_refs = []
+
         # Check gaps between consecutive section types on same page
         for i in range(len(section_elements) - 1):
             curr_type, curr_elem = section_elements[i]
@@ -1907,35 +1912,57 @@ class ComplianceValidator:
                 continue
 
             gap = next_elem.bbox[1] - curr_elem.bbox[3]  # y0_next - y1_curr
+            expected = None
 
-            # Authors → Keywords should have ~2 blank lines (~24pt gap)
+            # Authors/Affiliations → Keywords should have ~2 blank lines (~24pt gap)
             if curr_type in ['Authors', 'Affiliations'] and next_type == 'Keywords':
-                if gap < 18:  # Less than ~2 lines
-                    spacing_issues.append({
-                        'from': curr_type,
-                        'to': next_type,
-                        'gap': gap,
-                        'expected': '2 blank lines (~24pt)'
-                    })
+                if gap < 18:
+                    expected = '2 blank lines (~24pt)'
 
             # Keywords → Abstract should have ~2 blank lines
             elif curr_type == 'Keywords' and next_type == 'Abstract':
                 if gap < 18:
-                    spacing_issues.append({
-                        'from': curr_type,
-                        'to': next_type,
-                        'gap': gap,
-                        'expected': '2 blank lines (~24pt)'
-                    })
+                    expected = '2 blank lines (~24pt)'
+
+            if expected:
+                spacing_issues.append({
+                    'from': curr_type,
+                    'to': next_type,
+                    'gap': gap,
+                    'expected': expected
+                })
+
+                # Build a bbox covering the gap region between the two elements
+                # Use the wider of the two elements' horizontal span
+                x0 = min(curr_elem.bbox[0], next_elem.bbox[0])
+                x1 = max(curr_elem.bbox[2], next_elem.bbox[2])
+                y0 = curr_elem.bbox[3]      # bottom of upper element
+                y1 = next_elem.bbox[1]       # top of lower element
+
+                # If gap is tiny/negative (overlapping), expand to cover both edges
+                if y1 - y0 < 4:
+                    y0 -= 2
+                    y1 += 2
+
+                gap_bbox = (x0, y0, x1, y1)
+                instance_msg = (f"Spacing: {curr_type} -> {next_type}: "
+                                f"{gap:.0f}pt gap, expected {expected}")
+                element_refs.append((curr_elem.page, gap_bbox, instance_msg))
 
         if spacing_issues:
-            issue = spacing_issues[0]
+            details_parts = []
+            for issue in spacing_issues:
+                details_parts.append(
+                    f"{issue['from']} -> {issue['to']}: "
+                    f"{issue['gap']:.0f}pt gap (expected {issue['expected']})"
+                )
             self.results.append(ValidationResult(
                 check_name="Section Spacing",
                 passed=False,
                 severity=Severity.WARNING,
-                message=f"Insufficient spacing between {issue['from']} and {issue['to']}",
-                details=f"Found {issue['gap']:.0f}pt gap, expected {issue['expected']}"
+                message=f"Insufficient spacing between sections ({len(spacing_issues)} issue(s))",
+                details="; ".join(details_parts),
+                element_refs=element_refs if element_refs else None
             ))
         else:
             self.results.append(ValidationResult(

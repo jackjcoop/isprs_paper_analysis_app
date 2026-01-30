@@ -99,29 +99,29 @@ class CitationValidator:
     PARENTHETICAL_PATTERN = re.compile(
         r'\('                                       # Open paren
         r'(?P<author>[' + _CAP + r'][' + _LET + r'\-\s]+)'           # Author name (Starts with Cap, Unicode support)
-        r'(?:et al\.?|& [' + _CAP + r'][' + _LET + r'\-]+|and [' + _CAP + r'][' + _LET + r'\-]+)?' # Optional: et al, & Author
+        r'(?:et\.?\s*al\.?|& [' + _CAP + r'][' + _LET + r'\-]+|and [' + _CAP + r'][' + _LET + r'\-]+)?' # Optional: et al, et. al., & Author
         r',?\s+'                                    # Comma/Space
         r'(?P<year>19\d{2}|20\d{2})'                # Year
         r'(?:[a-z])?'                               # Optional year suffix (2020a)
-        r'\)',                                      # Close paren
+        r'\)?',                                     # Close paren (optional — Document AI may truncate)
         re.MULTILINE | re.DOTALL
     )
 
     # 2. Author (Year) - Narrative citation
     NARRATIVE_PATTERN = re.compile(
         r'\b(?P<author>[' + _CAP + r'][' + _LET + r'\-]+)'           # Author name (Unicode support)
-        r'(?:\s+et al\.?|\s+and\s+[' + _CAP + r'][' + _LET + r'\-]+|\s*&\s*[' + _CAP + r'][' + _LET + r'\-]+)?' # et al modifiers
+        r'(?:\s+et\.?\s*al\.?|\s+and\s+[' + _CAP + r'][' + _LET + r'\-]+|\s*&\s*[' + _CAP + r'][' + _LET + r'\-]+)?' # et al / et. al. modifiers
         r'\s*\('                                    # Open paren
         r'(?P<year>19\d{2}|20\d{2})'                # Year
         r'(?:[a-z])?'                               # Optional year suffix
-        r'\)',                                      # Close paren
+        r'\)?',                                     # Close paren (optional — Document AI may truncate)
         re.MULTILINE | re.DOTALL
     )
 
     # 3. "Author et al., Year" - Simple format without parentheses
     SIMPLE_ET_AL_PATTERN = re.compile(
         r'\b(?P<author>[' + _CAP + r'][' + _LET + r'\-]+)'           # Author name (Unicode support)
-        r'\s+et al\.?,\s*'                          # et al., or et al, (period optional)
+        r'\s+et\.?\s*al\.?,\s*'                       # et al., et. al., or et al, (period optional)
         r'(?P<year>19\d{2}|20\d{2})'                # Year
         r'(?:[a-z])?'                               # Optional year suffix
     )
@@ -129,9 +129,9 @@ class CitationValidator:
     # 3b. "Author et al., (Year)" - et al. with parentheses around year
     SIMPLE_ET_AL_PAREN_PATTERN = re.compile(
         r'\b(?P<author>[' + _CAP + r'][' + _LET + r'\-]+)'           # Author name (Unicode support)
-        r'\s+et al\.?,\s*\('                        # et al., ( or et al, ( (period optional)
+        r'\s+et\.?\s*al\.?,\s*\('                    # et al., ( or et. al., ( (period optional)
         r'(?P<year>19\d{2}|20\d{2})'                # Year
-        r'(?:[a-z])?\)'                             # Optional year suffix and )
+        r'(?:[a-z])?\)?'                            # Optional year suffix and ) (optional — Document AI may truncate)
     )
 
     # 4. "Author, Year" - Simple comma-separated format
@@ -158,10 +158,27 @@ class CitationValidator:
         """Normalizes text by removing extra whitespace and newlines."""
         return ' '.join(text.split())
 
+    # Characters that NFKD decomposition does not reduce to ASCII base letters.
+    # These appear in academic author names extracted from PDFs and must map to
+    # their plain Latin equivalents for matching.
+    _EXTRA_CHAR_MAP = str.maketrans({
+        'đ': 'd', 'Đ': 'D',   # d with stroke  (Croatian/Serbian)
+        'ð': 'd', 'Ð': 'D',   # eth             (Icelandic)
+        'ø': 'o', 'Ø': 'O',   # o with stroke   (Danish/Norwegian)
+        'ł': 'l', 'Ł': 'L',   # l with stroke   (Polish)
+        'ß': 'ss',             # sharp s         (German)
+        'æ': 'ae', 'Æ': 'AE', # ligature ae
+        'œ': 'oe', 'Œ': 'OE', # ligature oe
+        'þ': 'th', 'Þ': 'Th', # thorn           (Icelandic)
+        'ı': 'i',              # dotless i        (Turkish)
+    })
+
     @staticmethod
     def _normalize_name(name: str) -> str:
         """Strip accents and normalize a name for comparison.
-        E.g., 'Cedeño' -> 'Cedeno', 'Müller' -> 'Muller'."""
+        E.g., 'Cedeño' -> 'Cedeno', 'Müller' -> 'Muller', 'Đorđević' -> 'Dordevic'."""
+        # First, replace characters that NFKD cannot decompose
+        name = name.translate(CitationValidator._EXTRA_CHAR_MAP)
         nfkd = unicodedata.normalize('NFKD', name)
         return ''.join(c for c in nfkd if not unicodedata.combining(c)).lower()
 
@@ -447,6 +464,17 @@ class CitationValidator:
                                     primary_surname = comma_match.group('author').strip()
                                     year = comma_match.group('year')
 
+        # Surname-only fallback: if no patterns matched, try to extract just the author name
+        # Handles truncated citations like "Berends et al.," with no year
+        if not primary_surname:
+            surname_only_match = re.match(
+                r'\b(?P<author>[' + self._CAP + r'][' + self._LET + r'\-]{2,})'
+                r'(?:\s+et\.?\s*al\.?)?\s*[,;.]',
+                normalized_text
+            )
+            if surname_only_match:
+                primary_surname = surname_only_match.group('author').strip()
+
         # Cleanup surname (remove standard words that might get caught)
         if primary_surname:
             # Take FIRST word (first author convention for multi-author citations)
@@ -478,8 +506,10 @@ class CitationValidator:
         if citation.citation_type != 'reference':
             return CitationMatch(citation, None, True, "Non-reference citation")
 
-        if not citation.primary_surname or not citation.year:
-            return CitationMatch(citation, None, False, "Could not parse Author/Year from citation")
+        if not citation.primary_surname:
+            return CitationMatch(citation, None, False, "Could not parse author from citation")
+        if not citation.year:
+            return self._match_citation_surname_only(citation, references)
 
         best_match = None
         highest_score = 0.0
@@ -615,6 +645,61 @@ class CitationValidator:
             confidence=highest_score
         )
 
+    def _match_citation_surname_only(
+        self,
+        citation: ParsedCitation,
+        references: List[ParsedReference]
+    ) -> CitationMatch:
+        """Match a citation that has a surname but no year.
+
+        This handles truncated citations like "Berends et al.," where
+        Document AI failed to capture the year. Requires a very high
+        surname similarity threshold (>=0.95) and applies a 0.9x
+        confidence penalty since there is no year confirmation.
+        """
+        cit_surname_norm = self._normalize_name(citation.primary_surname)
+        cit_surname_clean = citation.primary_surname.lower()
+
+        best_match = None
+        best_score = 0.0
+
+        for ref in references:
+            if not ref.primary_surname:
+                continue
+
+            ref_surname_clean = ref.primary_surname.lower()
+            ref_surname_norm = self._normalize_name(ref.primary_surname)
+
+            if cit_surname_clean == ref_surname_clean or cit_surname_norm == ref_surname_norm:
+                score = 1.0
+            elif cit_surname_norm in ref_surname_norm or ref_surname_norm in cit_surname_norm:
+                score = 0.95
+            else:
+                score = difflib.SequenceMatcher(None, cit_surname_norm, ref_surname_norm).ratio()
+
+            if score >= 0.95 and score > best_score:
+                best_score = score
+                best_match = ref
+
+        if best_match:
+            confidence = best_score * 0.9  # Penalty for no year confirmation
+            year_display = best_match.full_year or best_match.year or '?'
+            return CitationMatch(
+                citation=citation,
+                reference=best_match,
+                matched=True,
+                reason=f"Matched (surname only): {best_match.primary_surname} ({year_display})",
+                confidence=confidence
+            )
+
+        return CitationMatch(
+            citation=citation,
+            reference=None,
+            matched=False,
+            reason=f"No matching reference for {citation.primary_surname} (no year)",
+            confidence=0.0
+        )
+
     def search_main_text_for_citation(
         self,
         reference: ParsedReference,
@@ -638,11 +723,11 @@ class CitationValidator:
         # not just as bare digits (avoids matching DOIs, page numbers, dates)
         citation_year_pattern = re.compile(
             r'(?:'
-            r'\(\s*' + re.escape(year) + r'[a-z]?\s*\)'              # (2011)
+            r'\(\s*' + re.escape(year) + r'[a-z]?\s*\)?'             # (2011) or (2011 — truncated
             r'|'
             r',\s*' + re.escape(year) + r'[a-z]?\s*[);\]]'           # , 2011) or , 2011;
             r'|'
-            r'et\s+al\.?,?\s*\(?\s*' + re.escape(year) + r'[a-z]?\s*\)?'  # et al., 2011 or et al. (2011)
+            r'et\.?\s+al\.?,?\s*\(?\s*' + re.escape(year) + r'[a-z]?\s*\)?'  # et al., 2011 or et. al. (2011)
             r')'
         )
 
@@ -664,6 +749,110 @@ class CitationValidator:
                 nearby_text = text[search_start:search_end]
 
                 if citation_year_pattern.search(nearby_text):
+                    return True
+
+        # Pass 2: Cross-element search
+        # "Al-Manasir" at end of one element, "(2015)" at start of the next.
+        # Build per-page concatenated text from all Main_Text elements,
+        # sorted in reading order (column then y-position) so text at the
+        # end of one column is adjacent to text at the start of the next.
+        from collections import defaultdict
+        pages_elems: Dict[int, list] = defaultdict(list)
+        for element in main_text_elements:
+            if not hasattr(element, 'text') or not hasattr(element, 'page'):
+                continue
+            pages_elems[element.page].append(element)
+
+        for page_num, elems in pages_elems.items():
+            # Sort by reading order: left column top-to-bottom, then right column
+            def _reading_order(e):
+                if hasattr(e, 'bbox') and e.bbox:
+                    x_center = (e.bbox[0] + e.bbox[2]) / 2
+                    col = 0 if x_center < 300 else 1  # approximate midpoint
+                    return (col, e.bbox[1])
+                return (0, 0)
+            elems.sort(key=_reading_order)
+            texts = [self._fix_line_break_hyphens(e.text) for e in elems]
+            concatenated = ' '.join(texts)
+            for author_match in author_pattern.finditer(concatenated):
+                author_pos = author_match.start()
+                search_start = max(0, author_pos - 50)
+                search_end = min(len(concatenated), author_pos + len(first_author) + 50)
+                nearby_text = concatenated[search_start:search_end]
+                if citation_year_pattern.search(nearby_text):
+                    return True
+
+        return False
+
+    def search_main_text_for_float(
+        self,
+        float_type: str,
+        float_number: str,
+        main_text_elements: List
+    ) -> bool:
+        """Search Main_Text elements for a figure/table citation.
+
+        Looks for patterns like "Figure 5", "Fig. 5", "Table 3" as well as
+        compound references like "Tables 2 and 3", "Figures 1, 2, and 3",
+        or "Figs. 1-3" in the body text.
+
+        Args:
+            float_type: 'Figure' or 'Table'
+            float_number: The number to search for (e.g. '5')
+            main_text_elements: List of Main_Text elements with .text attribute
+
+        Returns:
+            True if the float is cited in the main text
+        """
+        num_esc = re.escape(float_number)
+
+        # Direct pattern: "Figure 5", "Fig. 5", "Table 3"
+        if float_type == 'Figure':
+            direct = re.compile(
+                r'\bFig(?:ure)?s?\.?\s*' + num_esc + r'\b', re.IGNORECASE
+            )
+            # Compound: "Figures 2 and 3", "Figs. 1, 2, and 3", "Figures 1-3"
+            # Prefix captures "Figures " or "Figs. " followed by a number list
+            compound_prefix = r'\bFig(?:ure)?s?\.?\s*'
+        else:
+            direct = re.compile(
+                r'\bTables?\s*' + num_esc + r'\b', re.IGNORECASE
+            )
+            compound_prefix = r'\bTables?\s*'
+
+        # Compound pattern: prefix + sequence of digits separated by
+        # commas / "and" / "&" / en-dash / hyphen, containing our number
+        compound = re.compile(
+            compound_prefix + r'(\d+(?:\s*(?:,\s*|\s+and\s+|\s*&\s*|\s*[-–]\s*)\d+)+)',
+            re.IGNORECASE
+        )
+
+        target = int(float_number)
+
+        for element in main_text_elements:
+            if not hasattr(element, 'text'):
+                continue
+            text = element.text
+
+            # Fast path: direct mention
+            if direct.search(text):
+                return True
+
+            # Compound path: "Tables 2 and 3" → check if target is in the list
+            for m in compound.finditer(text):
+                nums_text = m.group(1)
+                # Extract individual numbers
+                found_nums = [int(n) for n in re.findall(r'\d+', nums_text)]
+                # Expand ranges: "1-3" → [1, 2, 3]
+                if re.search(r'\d+\s*[-–]\s*\d+', nums_text):
+                    expanded = set()
+                    for rm in re.finditer(r'(\d+)\s*[-–]\s*(\d+)', nums_text):
+                        lo, hi = int(rm.group(1)), int(rm.group(2))
+                        expanded.update(range(lo, hi + 1))
+                    # Also include any standalone numbers
+                    expanded.update(found_nums)
+                    found_nums = list(expanded)
+                if target in found_nums:
                     return True
 
         return False
@@ -1030,6 +1219,9 @@ class CitationValidator:
             }
         }
 
+        # Fix cross-type misclassifications before validation
+        self._fix_cross_type_float_citations(extracted_elements)
+
         # Validate figures
         self._validate_floats(
             extracted_elements,
@@ -1045,6 +1237,52 @@ class CitationValidator:
         )
 
         return results
+
+    def _fix_cross_type_float_citations(self, extracted_elements: Dict[str, List]):
+        """Move misclassified float citations to the correct list.
+
+        Document AI sometimes places "Figure 8" text under
+        In_Text_Citations_Tables (or vice-versa). This method inspects the
+        text of each citation element and moves it to the correct list when
+        the text clearly belongs to the other type.
+        """
+        fig_key = 'In_Text_Citations_Figures'
+        tab_key = 'In_Text_Citations_Tables'
+
+        fig_list = extracted_elements.get(fig_key, [])
+        tab_list = extracted_elements.get(tab_key, [])
+
+        fig_re = re.compile(r'\bfig(?:ure)?\.?\b', re.IGNORECASE)
+        tab_re = re.compile(r'\btable\b', re.IGNORECASE)
+
+        # Check figure citations for table text
+        move_to_tab = []
+        keep_in_fig = []
+        for elem in fig_list:
+            text = elem.text if hasattr(elem, 'text') else ''
+            has_fig = bool(fig_re.search(text))
+            has_tab = bool(tab_re.search(text))
+            if has_tab and not has_fig:
+                move_to_tab.append(elem)
+            else:
+                keep_in_fig.append(elem)
+
+        # Check table citations for figure text
+        move_to_fig = []
+        keep_in_tab = []
+        for elem in tab_list:
+            text = elem.text if hasattr(elem, 'text') else ''
+            has_fig = bool(fig_re.search(text))
+            has_tab = bool(tab_re.search(text))
+            if has_fig and not has_tab:
+                move_to_fig.append(elem)
+            else:
+                keep_in_tab.append(elem)
+
+        # Apply moves
+        if move_to_tab or move_to_fig:
+            extracted_elements[fig_key] = keep_in_fig + move_to_fig
+            extracted_elements[tab_key] = keep_in_tab + move_to_tab
 
     def _validate_floats(
         self,
@@ -1091,13 +1329,16 @@ class CitationValidator:
                     'page': elem.page
                 })
 
-        # Parse citations
+        # Parse citations — extract ALL numbers from compound references
+        # e.g. "Tables 2 and 3" or "Figures 1, 2, and 3" should cite every number
         cited_numbers = set()
         for cit_elem in float_citations:
-            # Extract number from citation
-            match = re.search(r'\d+', cit_elem.text)
-            if match:
-                num = match.group(0)
+            # Extract all numbers from citation text
+            all_nums = re.findall(r'\d+', cit_elem.text)
+            if not all_nums:
+                continue
+
+            for num in all_nums:
                 cited_numbers.add(num)
 
                 citation_info = {
@@ -1132,9 +1373,17 @@ class CitationValidator:
                         'bbox': cit_elem.bbox
                     })
 
-        # Find uncited floats
+        # Find uncited floats — try main-text fallback before reporting
+        main_text_elements = extracted_elements.get('Main_Text', [])
         for num, float_info in floats_by_number.items():
             if not float_info['cited']:
+                # Fallback: search Main_Text for "Figure N" / "Table N"
+                if main_text_elements and self.search_main_text_for_float(
+                    float_type, num, main_text_elements
+                ):
+                    float_info['cited'] = True
+                    continue
+
                 # Include title_bbox for highlighting the title element
                 # Also include bbox (Figure_Number/Table_Number bbox) as fallback
                 results['uncited_figures' if float_type == 'Figure' else 'uncited_tables'].append({

@@ -354,15 +354,11 @@ class ReportGenerator:
             col_align=['left', 'status', 'left']
         )
 
-        # Check if we need a new page for manual reminders
-        y_pos = self._check_page_break(summary_doc, page, y_pos + 10, PAGE_HEIGHT, MARGIN)
-        if y_pos == MARGIN + 30:
-            page = summary_doc[-1]
-
         y_pos += 10
 
         # 4. Manual Review Reminders (2-column checklist grid)
-        y_pos = self._draw_checklist_grid(
+        page, y_pos = self._draw_checklist_grid(
+            doc=summary_doc,
             page=page,
             y=y_pos,
             categories=SUBJECTIVE_REMINDERS,
@@ -723,28 +719,35 @@ class ReportGenerator:
 
     def _draw_checklist_grid(
         self,
+        doc: fitz.Document,
         page: fitz.Page,
         y: float,
         categories: List[Dict],
         title: str = None
-    ) -> float:
+    ) -> Tuple[fitz.Page, float]:
         """
-        Draw a 2-column checklist grid.
+        Draw a 2-column checklist grid, handling page breaks.
 
         Args:
+            doc: PyMuPDF document object (needed to create new pages)
             page: PyMuPDF page object
             y: Starting y position
             categories: List of category dicts with 'category' and 'items' keys
             title: Optional section title
 
         Returns:
-            New y position after the grid
+            Tuple of (current page, new y position after the grid)
         """
         x = MARGIN
         col_width = CONTENT_WIDTH / 2 - 5
 
         # Draw title if provided
         if title:
+            # Check space for title block (~30pt)
+            if y + 30 > PAGE_HEIGHT - MARGIN:
+                page = doc.new_page(width=PAGE_WIDTH, height=PAGE_HEIGHT)
+                y = MARGIN + 30
+
             page.insert_text(
                 (x, y + 12),
                 title,
@@ -772,6 +775,11 @@ class ReportGenerator:
             right_items = len(right_cat['items']) if right_cat else 0
             max_items = max(left_items, right_items)
             box_height = 22 + max_items * 14
+
+            # Page break if this row won't fit
+            if y + box_height > PAGE_HEIGHT - MARGIN:
+                page = doc.new_page(width=PAGE_WIDTH, height=PAGE_HEIGHT)
+                y = MARGIN + 30
 
             # Draw left box
             left_rect = fitz.Rect(x, y, x + col_width, y + box_height)
@@ -827,7 +835,7 @@ class ReportGenerator:
 
             y += box_height + 5
 
-        return y + 5
+        return page, y + 5
 
 
 def generate_report(

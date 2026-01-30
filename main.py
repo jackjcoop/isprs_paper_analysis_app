@@ -60,7 +60,7 @@ class PDFComplianceAnalyzer:
     MIN_GAP_HEIGHT = 18  # ~1.5 lines of 9pt reference text
 
     # Minimum Document AI confidence to include an extracted element
-    MIN_CONFIDENCE = 0.6
+    MIN_CONFIDENCE = 0.5
 
     # Compiled regex patterns for heading classification
     SUB_SUB_HEADING_PATTERN = re.compile(r'^\d+\.\d+\.\d+\.?\s+')
@@ -1085,9 +1085,14 @@ class PDFComplianceAnalyzer:
             text
         )
 
-        # Year in the first ~100 characters
+        # Year in the first ~100 characters — but ignore years inside DOIs/URLs
+        # (e.g., "https://doi.org/10.1016/j.isprsjprs.2009.09.002" contains "2009"
+        # but that's not a publication year)
         early_text = text[:100]
-        has_early_year = bool(re.search(r'\b(19\d{2}|20\d{2})[a-z]?\b', early_text))
+        # Strip out DOI/URL substrings before checking for years
+        cleaned_for_year = re.sub(r'https?://\S+', '', early_text)
+        cleaned_for_year = re.sub(r'doi[:\s]\S+', '', cleaned_for_year, flags=re.IGNORECASE)
+        has_early_year = bool(re.search(r'\b(19\d{2}|20\d{2})[a-z]?\b', cleaned_for_year))
 
         # It's a new reference only if it has BOTH a surname start AND an early year
         return not (ref_start and has_early_year)
