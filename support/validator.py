@@ -171,6 +171,9 @@ class ComplianceValidator:
         if figure_table_results:
             self._check_figures_tables(figure_table_results)
 
+        # Check for duplicate figure/table numbers
+        self._check_duplicate_float_numbers(extracted_elements)
+
         # Check anonymization (if provided)
         if anonymization_result:
             self._check_anonymization(anonymization_result, extracted_elements)
@@ -517,6 +520,54 @@ class ComplianceValidator:
                 message=f"All {float_type.lower()} citations within ±1 page",
                 details=f"Validated {len(validation.get('citations', []))} citation(s)"
             ))
+
+    def _check_duplicate_float_numbers(self, extracted_elements: Dict[str, List]):
+        """Check for duplicate figure or table numbers (e.g. two Figure 4s).
+
+        Flags every occurrence of a duplicated number with a bbox annotation
+        and adds a summary entry to the validation results.
+        """
+        import re as _re
+
+        for float_type, key in [('Figure', 'Figure_Number'), ('Table', 'Table_Number')]:
+            elements = extracted_elements.get(key, [])
+            if not elements:
+                continue
+
+            # Group elements by their extracted number
+            by_number: Dict[str, list] = {}
+            for elem in elements:
+                match = _re.search(r'\d+', elem.text)
+                if not match:
+                    continue
+                num = match.group(0)
+                by_number.setdefault(num, []).append(elem)
+
+            # Find numbers with more than one occurrence
+            duplicates = {num: elems for num, elems in by_number.items() if len(elems) > 1}
+
+            if duplicates:
+                element_refs = []
+                dup_labels = []
+                for num, elems in sorted(duplicates.items(), key=lambda x: int(x[0])):
+                    dup_labels.append(f"{float_type} {num} (x{len(elems)})")
+                    for elem in elems:
+                        bbox = elem.bbox
+                        if hasattr(bbox, 'x0'):
+                            bbox = (bbox.x0, bbox.y0, bbox.x1, bbox.y1)
+                        if bbox:
+                            instance_msg = (f"Duplicate {float_type} {num} — "
+                                            f"appears {len(elems)} times (page {elem.page + 1})")
+                            element_refs.append((elem.page, bbox, instance_msg))
+
+                self.results.append(ValidationResult(
+                    check_name=f"Duplicate {float_type} Numbers",
+                    passed=False,
+                    severity=Severity.WARNING,
+                    message=f"Found duplicate {float_type.lower()} number(s): {', '.join(dup_labels)}",
+                    details=f"{len(duplicates)} {float_type.lower()} number(s) appear more than once",
+                    element_refs=element_refs if element_refs else None
+                ))
 
     def _check_anonymization(self, anonymization_result, extracted_elements: Dict[str, List]):
         """Check anonymization validation results."""
