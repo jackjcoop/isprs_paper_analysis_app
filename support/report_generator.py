@@ -169,8 +169,13 @@ class ReportGenerator:
                 if result.details and result.details not in annotations_by_location[bbox_key]['details']:
                     annotations_by_location[bbox_key]['details'].append(result.details)
 
-        # Now add combined annotations
+        # Now add combined annotations, tracking icon positions to avoid stacking
         color = WARNING_COLOR
+        # Track placed icon y-positions per page so we can offset collisions.
+        # Key: page index, Value: list of y-positions already used.
+        icon_positions_by_page: Dict[int, List[float]] = {}
+        ICON_HEIGHT = 20  # approximate height of a comment icon in points
+
         for bbox_key, annot_data in annotations_by_location.items():
             page = doc[annot_data['page_num']]
 
@@ -189,13 +194,28 @@ class ReportGenerator:
             # Combine details
             combined_details = "\n".join(annot_data['details']) if annot_data['details'] else ""
 
+            # Determine comment icon position, offsetting to avoid overlap
+            page_idx = annot_data['page_num']
+            if page_idx not in icon_positions_by_page:
+                icon_positions_by_page[page_idx] = []
+
+            bbox = annot_data['bbox']
+            icon_y = bbox[1]  # default: top of bbox
+
+            # Shift down until we find a slot that doesn't overlap an existing icon
+            for existing_y in sorted(icon_positions_by_page[page_idx]):
+                if abs(icon_y - existing_y) < ICON_HEIGHT:
+                    icon_y = existing_y + ICON_HEIGHT
+            icon_positions_by_page[page_idx].append(icon_y)
+
             self._add_annotation(
                 page=page,
                 bbox=annot_data['bbox'],
                 color=color,
                 check_name=combined_check_name,
                 message=combined_message,
-                details=combined_details
+                details=combined_details,
+                icon_y_override=icon_y
             )
 
     def _add_annotation(
@@ -205,7 +225,8 @@ class ReportGenerator:
         color: Tuple[float, float, float],
         check_name: str,
         message: str,
-        details: str = ""
+        details: str = "",
+        icon_y_override: Optional[float] = None
     ):
         """
         Add a visible rectangle with clickable comment annotation.
@@ -217,6 +238,8 @@ class ReportGenerator:
             check_name: Name of the validation check
             message: Main error/warning message
             details: Additional details
+            icon_y_override: Optional y-position for the comment icon
+                             (used to avoid stacking icons on top of each other)
         """
         rect = fitz.Rect(bbox)
 
@@ -232,7 +255,8 @@ class ReportGenerator:
             annotation_text += f"\n\nDetails: {details}"
 
         # Position note icon at top-right corner, outside the box
-        comment_pos = fitz.Point(rect.x1 + 2, rect.y0)
+        icon_y = icon_y_override if icon_y_override is not None else rect.y0
+        comment_pos = fitz.Point(rect.x1 + 2, icon_y)
         annot = page.add_text_annot(
             comment_pos,
             annotation_text,

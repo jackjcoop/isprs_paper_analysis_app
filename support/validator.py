@@ -430,6 +430,63 @@ class ComplianceValidator:
                 details=f"Validated {len(citation_results.get('references_parsed', []))} references"
             ))
 
+        # Check for malformed "et al." citations
+        self._check_malformed_et_al(citation_results)
+
+    def _check_malformed_et_al(self, citation_results: Dict):
+        """Detect malformed 'et al.' in citations (e.g. 'et a.' missing the 'l').
+
+        Scans every parsed citation's text for truncated or misspelled
+        variants of 'et al.' and flags each occurrence with a bbox
+        annotation on the PDF.
+        """
+        import re as _re
+
+        # Patterns that are WRONG — "et" followed by something that is NOT
+        # a valid "al" but looks like a botched attempt:
+        #   "et a."  "et a,"  "et a (" — 'a' without 'l'
+        #   "et la." — transposed
+        #   "et el." — wrong vowel
+        # We match "et <token>" where the token is NOT "al" and is 1-3 lowercase chars
+        # followed by punctuation, ensuring we don't match correct "et al".
+        malformed_re = _re.compile(
+            r'\bet\s+'           # "et "
+            r'(?!al\b)'         # NOT followed by correct "al"
+            r'([a-z]{1,3})'     # 1-3 letter token (the malformed part)
+            r'\.?'              # optional period
+            r'(?=[,;)\s(]|$)',  # followed by punctuation/space/end
+            _re.IGNORECASE
+        )
+
+        citations_parsed = citation_results.get('citations_parsed', [])
+        element_refs = []
+        malformed_examples = []
+
+        for cit in citations_parsed:
+            if cit.citation_type != 'reference':
+                continue
+            text = ' '.join(cit.text.split())  # normalize whitespace
+            m = malformed_re.search(text)
+            if m:
+                token = m.group(1)
+                # Build a short display label
+                label = f"'{text[:50]}{'...' if len(text) > 50 else ''}'"
+                malformed_examples.append(label)
+                if cit.bbox:
+                    instance_msg = (f"Malformed 'et al.' — found 'et {token}.' "
+                                    f"in citation: {text}")
+                    element_refs.append((cit.page, cit.bbox, instance_msg))
+
+        if malformed_examples:
+            self.results.append(ValidationResult(
+                check_name="Citation Formatting",
+                passed=False,
+                severity=Severity.WARNING,
+                message=f"Found {len(malformed_examples)} citation(s) with malformed 'et al.'",
+                details=f"Affected: {'; '.join(malformed_examples)}",
+                element_refs=element_refs if element_refs else None
+            ))
+
     def _check_figures_tables(self, figure_table_results: Dict):
         """Check figure and table citation validation results."""
         # Check figures
@@ -521,11 +578,59 @@ class ComplianceValidator:
                 details=f"Validated {len(validation.get('citations', []))} citation(s)"
             ))
 
+    @staticmethod
+    def _bboxes_overlap(a, b, threshold: float = 0.5) -> bool:
+        """Check if two bounding boxes overlap significantly.
+
+        Returns True if the intersection area is >= threshold of the
+        smaller box's area.  Used to detect Document AI extracting the
+        same physical element as multiple entities.
+        """
+        ix0 = max(a[0], b[0])
+        iy0 = max(a[1], b[1])
+        ix1 = min(a[2], b[2])
+        iy1 = min(a[3], b[3])
+        if ix1 <= ix0 or iy1 <= iy0:
+            return False
+        intersection = (ix1 - ix0) * (iy1 - iy0)
+        area_a = max((a[2] - a[0]) * (a[3] - a[1]), 1)
+        area_b = max((b[2] - b[0]) * (b[3] - b[1]), 1)
+        return intersection / min(area_a, area_b) >= threshold
+
+    def _dedup_float_elements(self, elements: list) -> list:
+        """Remove elements that are duplicate extractions of the same
+        physical caption (same page, overlapping bbox)."""
+        if len(elements) < 2:
+            return list(elements)
+
+        kept = []
+        for elem in elements:
+            bbox = elem.bbox
+            if hasattr(bbox, 'x0'):
+                bbox = (bbox.x0, bbox.y0, bbox.x1, bbox.y1)
+            is_dup = False
+            for prev in kept:
+                prev_bbox = prev.bbox
+                if hasattr(prev_bbox, 'x0'):
+                    prev_bbox = (prev_bbox.x0, prev_bbox.y0, prev_bbox.x1, prev_bbox.y1)
+                if elem.page == prev.page and bbox and prev_bbox:
+                    if self._bboxes_overlap(bbox, prev_bbox):
+                        is_dup = True
+                        break
+            if not is_dup:
+                kept.append(elem)
+        return kept
+
     def _check_duplicate_float_numbers(self, extracted_elements: Dict[str, List]):
         """Check for duplicate figure or table numbers (e.g. two Figure 4s).
 
         Flags every occurrence of a duplicated number with a bbox annotation
         and adds a summary entry to the validation results.
+
+        Document AI sometimes extracts the same physical caption as multiple
+        entities with slightly different bboxes.  These are deduplicated
+        (same page + overlapping bbox) so only genuinely distinct occurrences
+        are flagged.
         """
         import re as _re
 
@@ -543,7 +648,11 @@ class ComplianceValidator:
                 num = match.group(0)
                 by_number.setdefault(num, []).append(elem)
 
-            # Find numbers with more than one occurrence
+            # Deduplicate within each group (same page + overlapping bbox)
+            for num in by_number:
+                by_number[num] = self._dedup_float_elements(by_number[num])
+
+            # Find numbers with more than one distinct occurrence
             duplicates = {num: elems for num, elems in by_number.items() if len(elems) > 1}
 
             if duplicates:
