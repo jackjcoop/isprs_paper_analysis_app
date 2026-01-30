@@ -363,28 +363,43 @@ class ComplianceValidator:
                 element_refs=element_refs if element_refs else None
             ))
 
-        # Check for orphan citations
+        # Run malformed "et al." check first so we can exclude those from orphans
+        malformed_texts = self._check_malformed_et_al(citation_results)
+
+        # Check for orphan citations — exclude malformed ones (they get their own box)
         orphan_citations = citation_results.get('orphan_citations', [])
         if orphan_citations:
-            # Build element_refs from parsed citations for PDF annotation
-            element_refs = []
-            citations_parsed = citation_results.get('citations_parsed', [])
-            orphan_texts = set(c['text'] for c in orphan_citations)
+            # Filter out citations already flagged as malformed
+            clean_orphans = [c for c in orphan_citations if c['text'] not in malformed_texts]
 
-            for parsed_cit in citations_parsed:
-                if parsed_cit.text in orphan_texts:
-                    instance_msg = f"Citation '{parsed_cit.text}' has no matching reference in bibliography"
-                    element_refs.append((parsed_cit.page, parsed_cit.bbox, instance_msg))
+            if clean_orphans:
+                # Build element_refs from parsed citations for PDF annotation
+                element_refs = []
+                citations_parsed = citation_results.get('citations_parsed', [])
+                orphan_texts = set(c['text'] for c in clean_orphans)
 
-            orphan_list = '; '.join(c['text'] for c in orphan_citations)
-            self.results.append(ValidationResult(
-                check_name="Orphaned Citations",
-                passed=False,
-                severity=Severity.WARNING,
-                message=f"Found {len(orphan_citations)} citation(s) without matching reference",
-                details=f"Unmatched citations: {orphan_list}",
-                element_refs=element_refs if element_refs else None
-            ))
+                for parsed_cit in citations_parsed:
+                    if parsed_cit.text in orphan_texts:
+                        instance_msg = f"Citation '{parsed_cit.text}' has no matching reference in bibliography"
+                        element_refs.append((parsed_cit.page, parsed_cit.bbox, instance_msg))
+
+                orphan_list = '; '.join(c['text'] for c in clean_orphans)
+                self.results.append(ValidationResult(
+                    check_name="Orphaned Citations",
+                    passed=False,
+                    severity=Severity.WARNING,
+                    message=f"Found {len(clean_orphans)} citation(s) without matching reference",
+                    details=f"Unmatched citations: {orphan_list}",
+                    element_refs=element_refs if element_refs else None
+                ))
+            else:
+                self.results.append(ValidationResult(
+                    check_name="Orphaned Citations",
+                    passed=True,
+                    severity=Severity.SUCCESS,
+                    message="All citations have matching references",
+                    details=f"Validated {len(citation_results.get('citations_parsed', []))} citations"
+                ))
         else:
             self.results.append(ValidationResult(
                 check_name="Orphaned Citations",
@@ -430,15 +445,16 @@ class ComplianceValidator:
                 details=f"Validated {len(citation_results.get('references_parsed', []))} references"
             ))
 
-        # Check for malformed "et al." citations
-        self._check_malformed_et_al(citation_results)
-
-    def _check_malformed_et_al(self, citation_results: Dict):
+    def _check_malformed_et_al(self, citation_results: Dict) -> set:
         """Detect malformed 'et al.' in citations (e.g. 'et a.' missing the 'l').
 
         Scans every parsed citation's text for truncated or misspelled
         variants of 'et al.' and flags each occurrence with a bbox
         annotation on the PDF.
+
+        Returns:
+            Set of original citation texts that were flagged as malformed,
+            so callers can exclude them from other checks (e.g. orphan citations).
         """
         import re as _re
 
@@ -461,6 +477,7 @@ class ComplianceValidator:
         citations_parsed = citation_results.get('citations_parsed', [])
         element_refs = []
         malformed_examples = []
+        malformed_texts: set = set()
 
         for cit in citations_parsed:
             if cit.citation_type != 'reference':
@@ -469,6 +486,7 @@ class ComplianceValidator:
             m = malformed_re.search(text)
             if m:
                 token = m.group(1)
+                malformed_texts.add(cit.text)  # original text for orphan filtering
                 # Build a short display label
                 label = f"'{text[:50]}{'...' if len(text) > 50 else ''}'"
                 malformed_examples.append(label)
@@ -486,6 +504,8 @@ class ComplianceValidator:
                 details=f"Affected: {'; '.join(malformed_examples)}",
                 element_refs=element_refs if element_refs else None
             ))
+
+        return malformed_texts
 
     def _check_figures_tables(self, figure_table_results: Dict):
         """Check figure and table citation validation results."""

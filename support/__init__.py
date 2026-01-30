@@ -9,13 +9,43 @@ This package contains the core functionality for document analysis:
 - output_generator: JSON output formatting
 """
 
-from .converter import DocumentConverter, convert_document
-from .document_ai_client import DocumentAIClient, BoundingBox, ExtractedElement
-from .pymupdf_extractor import PyMuPDFExtractor, TextSpan, EnrichedElement
-from .validator import ComplianceValidator, ValidationResult, Severity
-from .output_generator import OutputGenerator
-from .citation_validator import CitationValidator, ParsedCitation, ParsedReference, CitationMatch
-from .anonymization_checker import AnonymizationChecker, Entity, AnonymizationResult, check_anonymization
+# Lazy-safe imports: each submodule is imported independently so that a
+# missing third-party dependency (e.g. google-cloud for Document AI) does
+# not prevent the rest of the package from loading.
+try:
+    from .converter import DocumentConverter, convert_document
+except ImportError:
+    pass
+
+try:
+    from .document_ai_client import DocumentAIClient, BoundingBox, ExtractedElement
+except ImportError:
+    pass
+
+try:
+    from .pymupdf_extractor import PyMuPDFExtractor, TextSpan, EnrichedElement
+except ImportError:
+    pass
+
+try:
+    from .validator import ComplianceValidator, ValidationResult, Severity
+except ImportError:
+    pass
+
+try:
+    from .output_generator import OutputGenerator
+except ImportError:
+    pass
+
+try:
+    from .citation_validator import CitationValidator, ParsedCitation, ParsedReference, CitationMatch
+except ImportError:
+    pass
+
+try:
+    from .anonymization_checker import AnonymizationChecker, Entity, AnonymizationResult, check_anonymization
+except ImportError:
+    pass
 
 __all__ = [
     'DocumentConverter',
