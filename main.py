@@ -1052,6 +1052,9 @@ class PDFComplianceAnalyzer:
         # Year with period: "2020."
         if re.search(r'\b(19|20)\d{2}[a-z]?\.\s*$', text):
             return True
+        # Year in parentheses with trailing period: "(2020)." or "(2020a)."
+        if re.search(r'\((19|20)\d{2}[a-z]?\)\.\s*$', text):
+            return True
         # Page count: "123 pp."
         if re.search(r'\d+\s*pp\.?\s*$', text):
             return True

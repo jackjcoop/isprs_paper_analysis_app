@@ -1764,10 +1764,20 @@ class ComplianceValidator:
         if len(references) < 2:
             return  # Not enough to check order
 
-        # Extract first author surnames for comparison (in reading order)
-        # Also track the reference element for highlighting
+        # Extract first author surnames for comparison (in reading order). The
+        # surname pattern accepts an optional lowercase nobility/locative
+        # particle prefix (e.g. "van der Waals", "von Neumann"). The sort key
+        # strips Unicode accents via _normalize_name() so "M\u00FCller" sorts with
+        # "Mueller" rather than after the ASCII range.
         ref_data = []
-        author_pattern = re.compile(r'^([A-Z][a-z\u00C0-\u024F]+)')
+        author_pattern = re.compile(
+            r'^(?P<full>'
+            r'(?:(?:van der|van den|van|von|de la|de|del|della|der|den|du|da|dos|el|la|le|ten|ter)\s+)?'
+            r'[A-Z\u00C0-\u00D6\u00D8-\u00DE\u0100-\u024F][a-z\u00C0-\u024F\'\-]+'
+            r')'
+        )
+        from .citation_validator import CitationValidator as _CV
+        normalize = _CV._normalize_name
 
         for ref in sorted_refs:
             text = ref.text.strip()
@@ -1776,8 +1786,10 @@ class ComplianceValidator:
                 elem_ref = None
                 if hasattr(ref, 'page') and hasattr(ref, 'bbox') and ref.bbox is not None:
                     elem_ref = (ref.page, ref.bbox)
+                full_name = match.group('full')
                 ref_data.append({
-                    'surname': match.group(1).lower(),
+                    'surname': normalize(full_name).lower(),
+                    'display': full_name,
                     'text': text[:50],
                     'element_ref': elem_ref
                 })
@@ -1944,20 +1956,28 @@ class ComplianceValidator:
         right_col_right = page_width - right_margin
 
         right_edge_tolerance = 8   # ±8pt for an interior line to count as reaching the right edge
-        y_tolerance = 2.0          # pt — group spans into the same line if y0 within this
+        # Group spans into a line by baseline-center proximity. Tolerance must
+        # accommodate superscripts and inline equations that shift y0 by 2-4pt
+        # at 9pt body text — too tight a tolerance splits a single visual line
+        # into two and produces false-positive justification warnings.
+        y_tolerance = 3.5  # pt
+
+        def _baseline_center(s):
+            return (s.bbox[1] + s.bbox[3]) / 2
 
         def _group_lines(spans):
-            sorted_spans = sorted(spans, key=lambda s: (s.bbox[1], s.bbox[0]))
+            sorted_spans = sorted(spans, key=lambda s: (_baseline_center(s), s.bbox[0]))
             lines = []
             current = [sorted_spans[0]]
-            current_y = sorted_spans[0].bbox[1]
+            current_center = _baseline_center(sorted_spans[0])
             for s in sorted_spans[1:]:
-                if abs(s.bbox[1] - current_y) <= y_tolerance:
+                center = _baseline_center(s)
+                if abs(center - current_center) <= y_tolerance:
                     current.append(s)
                 else:
                     lines.append(current)
                     current = [s]
-                    current_y = s.bbox[1]
+                    current_center = center
             lines.append(current)
             return [
                 (

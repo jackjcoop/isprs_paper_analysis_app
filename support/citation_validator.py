@@ -97,11 +97,20 @@ class CitationValidator:
     _LET = r'a-zA-ZÀ-ÖØ-öø-ÿ\u0100-\u024F'
 
     # 1. (Author, Year) or (Author & Author, Year) or (Author et al., Year)
-    # Handles newlines (\s includes \n)
+    # The author group is intentionally ASCII/Latin-only without internal whitespace
+    # so that "et al."/"& X"/"and X" cannot be silently absorbed into the surname
+    # via greedy backtracking. Multi-word particles ("van der Waals") are handled
+    # by the optional lowercase-particle prefix.
     PARENTHETICAL_PATTERN = re.compile(
         r'\('                                       # Open paren
-        r'(?P<author>[' + _CAP + r'][' + _LET + r'\-\s]+)'           # Author name (Starts with Cap, Unicode support)
-        r'(?:et\.?\s*al\.?|& [' + _CAP + r'][' + _LET + r'\-]+|and [' + _CAP + r'][' + _LET + r'\-]+)?' # Optional: et al, et. al., & Author
+        r'(?P<author>'
+        r'(?:(?:van der|van den|van|von|de la|de|del|della|der|den|du|da|dos|el|la|le|ten|ter)\s+)?'
+        r'[' + _CAP + r'][' + _LET + r'\-]+'        # Surname (Cap + letters, no spaces)
+        r')'
+        r'(?:\s+et\.?\s*al\.?'                     # et al / et. al.
+        r'|\s*&\s*[' + _CAP + r'][' + _LET + r'\-]+' # & Author
+        r'|\s+and\s+[' + _CAP + r'][' + _LET + r'\-]+' # and Author
+        r')?'
         r',?\s+'                                    # Comma/Space
         r'(?P<year>19\d{2}|20\d{2})'                # Year
         r'(?:[a-z])?'                               # Optional year suffix (2020a)
@@ -110,9 +119,18 @@ class CitationValidator:
     )
 
     # 2. Author (Year) - Narrative citation
+    # The particle prefix is included INSIDE the author group so the captured
+    # surname matches the reference list (e.g. "von Neumann" sorts/matches
+    # against the bibliography entry "von Neumann, J., 1955.").
     NARRATIVE_PATTERN = re.compile(
-        r'\b(?P<author>[' + _CAP + r'][' + _LET + r'\-]+)'           # Author name (Unicode support)
-        r'(?:\s+et\.?\s*al\.?|\s+and\s+[' + _CAP + r'][' + _LET + r'\-]+|\s*&\s*[' + _CAP + r'][' + _LET + r'\-]+)?' # et al / et. al. modifiers
+        r'(?P<author>'
+        r'(?:\b(?:van der|van den|van|von|de la|de|del|della|der|den|du|da|dos|el|la|le|ten|ter)\s+)?'
+        r'[' + _CAP + r'][' + _LET + r'\-]+'        # Surname (no spaces)
+        r')'
+        r'(?:\s+et\.?\s*al\.?'
+        r'|\s+and\s+[' + _CAP + r'][' + _LET + r'\-]+'
+        r'|\s*&\s*[' + _CAP + r'][' + _LET + r'\-]+'
+        r')?'
         r'\s*\('                                    # Open paren
         r'(?P<year>19\d{2}|20\d{2})'                # Year
         r'(?:[a-z])?'                               # Optional year suffix
@@ -150,6 +168,15 @@ class CitationValidator:
         r'\s+(?:and|&)\s+[' + _CAP + r'][' + _LET + r'\-]+,\s*'      # and/& Second author,
         r'(?P<year>19\d{2}|20\d{2})'                # Year
         r'(?:[a-z])?'                               # Optional year suffix
+    )
+
+    # Author-start detector for splitting joined citations. Allows a lowercase
+    # nobility/locative particle prefix ("van der Waals", "von Neumann",
+    # "de la Rosa") before the capital surname.
+    _AUTHOR_START_RE = re.compile(
+        r'\b(?:van der|van den|van|von|de la|de|del|della|der|den|du|da|dos|el|la|le|ten|ter)\s+'
+        r'[' + _CAP + r']'
+        r'|[' + _CAP + r']'
     )
 
     def __init__(self):
@@ -219,7 +246,7 @@ class CitationValidator:
                 # (start of next author name)
                 prev_end = year_matches[i - 1].end()
                 remaining = normalized[prev_end:]
-                author_start = re.search(r'[A-ZÀ-ÖØ-Þ\u0100-\u024F]', remaining)
+                author_start = self._AUTHOR_START_RE.search(remaining)
                 if author_start:
                     start = prev_end + author_start.start()
                 else:
@@ -368,20 +395,29 @@ class CitationValidator:
             all_authors = [a for a in all_authors if a.lower() not in ['et', 'al', 'and', 'the', 'in', 'of']]
 
             # 4. Extract Title and Additional Info
-            # Title is first sentence after year (up to first period)
-            # Additional info is everything after the title
+            # Title is the first sentence after the year. Naive "first period"
+            # splitting breaks on abbreviated journal names like
+            # "Photogramm. Remote Sens. J." — those internal periods are followed
+            # by another capitalised abbreviation, not a new sentence.
+            # Heuristic: split only at a period that is followed by whitespace
+            # and a Capital-then-lowercase word (real sentence start), or at
+            # end-of-string.
             additional_info = None
-            title_match = re.search(r'^[\W_]*([^.]+?)\.(.*)$', title_segment, re.DOTALL)
-            if title_match:
-                title = title_match.group(1).strip()
-                # Everything after the title period
-                remaining = title_match.group(2).strip()
+            cleaned_title_seg = title_segment.lstrip('.,:;\"\' \t')
+            sentence_split = re.search(
+                r'\.\s+(?=[A-ZÀ-ÖØ-ÞĀ-ɏ][a-zÀ-ɏ])',
+                cleaned_title_seg
+            )
+            if sentence_split:
+                title = cleaned_title_seg[:sentence_split.start()].strip()
+                remaining = cleaned_title_seg[sentence_split.end():].strip()
                 if remaining:
                     additional_info = remaining
+            elif cleaned_title_seg.endswith('.'):
+                # Whole title segment is one sentence ending in a period
+                title = cleaned_title_seg.rstrip('.').strip()
             else:
-                # No period found, use first 50 chars as title
-                title = title_segment[:50] + "..." if len(title_segment) > 50 else title_segment
-                additional_info = None
+                title = cleaned_title_seg[:50] + "..." if len(cleaned_title_seg) > 50 else cleaned_title_seg
 
         else:
             issues.append("No valid year found")
