@@ -54,7 +54,6 @@ PAGE_REQUIREMENTS = {
         'left': 57,          # 20mm
         'right': 57,         # 20mm
     },
-    'min_pages': 6,
     'max_pages': 8,
 }
 
@@ -800,25 +799,16 @@ class ComplianceValidator:
         self._check_section_spacing(extracted_elements)
 
     def _check_page_count(self, page_count: int):
-        """Check document is 6-8 pages per ISPRS requirements."""
-        min_pages = PAGE_REQUIREMENTS['min_pages']
+        """Check document does not exceed ISPRS maximum page count."""
         max_pages = PAGE_REQUIREMENTS['max_pages']
 
-        if page_count < min_pages:
+        if page_count > max_pages:
             self.results.append(ValidationResult(
                 check_name="Page Count",
                 passed=False,
-                severity=Severity.WARNING,
-                message=f"Too few pages: {page_count} (minimum {min_pages})",
-                details=f"ISPRS requires {min_pages}-{max_pages} pages"
-            ))
-        elif page_count > max_pages:
-            self.results.append(ValidationResult(
-                check_name="Page Count",
-                passed=False,
-                severity=Severity.WARNING,
+                severity=Severity.ERROR,
                 message=f"Too many pages: {page_count} (maximum {max_pages})",
-                details=f"ISPRS requires {min_pages}-{max_pages} pages"
+                details=f"ISPRS allows a maximum of {max_pages} pages"
             ))
         else:
             self.results.append(ValidationResult(
@@ -826,7 +816,7 @@ class ComplianceValidator:
                 passed=True,
                 severity=Severity.SUCCESS,
                 message=f"Page count OK: {page_count} pages",
-                details=f"Within {min_pages}-{max_pages} page requirement"
+                details=f"Within {max_pages}-page maximum"
             ))
 
     def _check_abstract_length(self, extracted_elements: Dict[str, List]):
