@@ -870,7 +870,14 @@ class CitationValidator:
         for element in main_text_elements:
             if not hasattr(element, 'text'):
                 continue
-            text = element.text
+            # Normalize whitespace (newlines/tabs -> spaces) and undo
+            # line-break hyphenation. Without this, citations like
+            # "Fig-\nure 3" or "Fig- ure 3" — which Document AI does not flag
+            # as In_Text_Citations_Figures but are still present in the
+            # surrounding Main_Text — would slip past the regex below and
+            # the figure would be falsely reported as uncited.
+            text = ' '.join(element.text.split())
+            text = self._fix_line_break_hyphens(text)
 
             # Fast path: direct mention
             if direct.search(text):
