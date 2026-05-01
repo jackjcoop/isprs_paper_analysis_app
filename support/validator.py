@@ -991,6 +991,35 @@ class ComplianceValidator:
         normalized = re.sub(r'[\s\-_]', '', font_name).lower()
         return any(alias in normalized for alias in TIMES_FONT_ALIASES)
 
+    def _has_bold_heading_prefix(self, spans) -> bool:
+        """Return True if the leading consecutive bold spans of an element
+        form a sub-sub-heading prefix (i.e. start with the `N.N.N` numbering
+        pattern).
+
+        Used to avoid false-positive "Missing bold formatting" warnings on
+        Sub_sub_Headings where Document AI's bbox extends past the heading
+        title to include the same-line continuation text. Per ISPRS §3.1
+        ("Subsubheadings ... typed in bold ... with text following on the
+        same line"), a bold prefix followed by a non-bold continuation is
+        the correct format.
+        """
+        if not spans:
+            return False
+        sorted_spans = sorted(spans, key=lambda s: (s.bbox[1], s.bbox[0]))
+        leading: List[str] = []
+        for s in sorted_spans:
+            text = getattr(s, 'text', '') or ''
+            if not text.strip():
+                continue  # skip pure-whitespace spans
+            if getattr(s, 'is_bold', False):
+                leading.append(text)
+            else:
+                break
+        if not leading:
+            return False
+        bold_prefix = ''.join(leading).strip()
+        return bool(re.match(r'^\d+\.\d+\.\d+', bold_prefix))
+
     def _is_times_font(self, elem) -> bool:
         """
         Check if element uses Times font, accounting for mixed-font paragraphs.
@@ -1185,7 +1214,21 @@ class ComplianceValidator:
 
                 # Check bold requirement
                 if required_bold and hasattr(elem, 'is_bold'):
-                    if not elem.is_bold:
+                    is_bold = elem.is_bold
+
+                    # Sub_sub_Headings: per ISPRS the heading is bold but text
+                    # follows on the same line in regular weight. The element
+                    # bbox produced by Document AI often spans both, so the
+                    # dominant-weight is_bold flag reports False even when the
+                    # heading prefix itself is correctly bold. Accept the
+                    # element if a leading bold prefix matching the
+                    # sub-sub-heading numbering pattern is present.
+                    if (not is_bold
+                            and elem_type == 'Sub_sub_Headings'
+                            and getattr(elem, 'spans', None)):
+                        is_bold = self._has_bold_heading_prefix(elem.spans)
+
+                    if not is_bold:
                         font_issues.append({
                             'type': elem_type,
                             'issue': 'bold',
