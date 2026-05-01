@@ -25,7 +25,9 @@ try:
         except Exception:
             SPACY_AVAILABLE = False
             _nlp = None
-except ImportError:
+except Exception:
+    # Catches ImportError as well as runtime failures from spaCy's C extensions
+    # (e.g. numpy ABI mismatches that surface as ValueError on import).
     SPACY_AVAILABLE = False
     _nlp = None
 
