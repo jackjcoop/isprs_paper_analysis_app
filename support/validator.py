@@ -54,6 +54,7 @@ PAGE_REQUIREMENTS = {
         'left': 57,          # 20mm
         'right': 57,         # 20mm
     },
+    'min_pages': 6,
     'max_pages': 8,
 }
 
@@ -181,9 +182,9 @@ class ComplianceValidator:
         if page_count is not None and page_dimensions is not None:
             self._check_isprs_formatting(extracted_elements, page_count, page_dimensions, citation_results)
 
-        # Determine overall pass/fail
+        # Determine overall pass/fail (any failed WARNING or ERROR fails the run)
         has_errors = any(
-            r.severity == Severity.WARNING and not r.passed
+            r.severity in (Severity.WARNING, Severity.ERROR) and not r.passed
             for r in self.results
         )
 
@@ -762,8 +763,14 @@ class ComplianceValidator:
         citation_results: Optional[Dict] = None
     ):
         """Check ISPRS formatting requirements."""
-        # Page count validation
+        # Page count validation (6-8 page range)
         self._check_page_count(page_count)
+
+        # Required named sections (Introduction, Conclusions)
+        self._check_required_named_sections(extracted_elements)
+
+        # Keyword count (max 6)
+        self._check_keywords_count(extracted_elements)
 
         # Abstract word count validation
         self._check_abstract_length(extracted_elements)
@@ -786,8 +793,11 @@ class ComplianceValidator:
         # Reference alphabetical order validation
         self._check_reference_order(extracted_elements, page_dimensions[0], citation_results)
 
-        # Reference justification validation (left-justified within columns)
+        # Reference justification validation (full justification within columns)
         self._check_reference_justification(extracted_elements, page_dimensions[0], citation_results)
+
+        # Body text justification (Main_Text fully justified)
+        self._check_body_justification(extracted_elements, page_dimensions[0])
 
         # Page layout validation
         self._check_page_layout(page_dimensions, extracted_elements)
@@ -795,11 +805,12 @@ class ComplianceValidator:
         # Column layout validation (single-column header, two-column body)
         self._check_column_layout(extracted_elements, page_dimensions[0])
 
-        # Section spacing validation
+        # Section spacing validation (title block + headings + equations)
         self._check_section_spacing(extracted_elements)
 
     def _check_page_count(self, page_count: int):
-        """Check document does not exceed ISPRS maximum page count."""
+        """Check document is within ISPRS page bounds (6-8 pages)."""
+        min_pages = PAGE_REQUIREMENTS['min_pages']
         max_pages = PAGE_REQUIREMENTS['max_pages']
 
         if page_count > max_pages:
@@ -810,13 +821,98 @@ class ComplianceValidator:
                 message=f"Too many pages: {page_count} (maximum {max_pages})",
                 details=f"ISPRS allows a maximum of {max_pages} pages"
             ))
+        elif page_count < min_pages:
+            self.results.append(ValidationResult(
+                check_name="Page Count",
+                passed=False,
+                severity=Severity.WARNING,
+                message=f"Too few pages: {page_count} (minimum {min_pages})",
+                details=f"ISPRS requires at least {min_pages} pages"
+            ))
         else:
             self.results.append(ValidationResult(
                 check_name="Page Count",
                 passed=True,
                 severity=Severity.SUCCESS,
                 message=f"Page count OK: {page_count} pages",
-                details=f"Within {max_pages}-page maximum"
+                details=f"Within {min_pages}-{max_pages} page range"
+            ))
+
+    def _check_required_named_sections(self, extracted_elements: Dict[str, List]):
+        """Verify Introduction and Conclusions headings are present."""
+        headings = extracted_elements.get('Headings', [])
+
+        def _heading_text(h):
+            text = getattr(h, 'text', '') or ''
+            # Strip leading numbering like "1.", "1.0", "I.", "1. "
+            return re.sub(r'^[\d\.IVXLC]+\s*\.?\s*', '', text.strip(), flags=re.IGNORECASE)
+
+        normalized = [_heading_text(h).lower() for h in headings]
+
+        required = [
+            ('Introduction', re.compile(r'^introduction\b')),
+            ('Conclusions', re.compile(r'^conclusions?\b')),
+        ]
+
+        for name, pattern in required:
+            matched = [h for h, n in zip(headings, normalized) if pattern.match(n)]
+            if matched:
+                self.results.append(ValidationResult(
+                    check_name=f"Required Section: {name}",
+                    passed=True,
+                    severity=Severity.SUCCESS,
+                    message=f"{name} section present",
+                    details=f"Heading: '{matched[0].text.strip()}'"
+                ))
+            else:
+                self.results.append(ValidationResult(
+                    check_name=f"Required Section: {name}",
+                    passed=False,
+                    severity=Severity.WARNING,
+                    message=f"Missing {name} section",
+                    details=f"ISPRS requires a {name} heading in the main body"
+                ))
+
+    def _check_keywords_count(self, extracted_elements: Dict[str, List]):
+        """Verify the Keywords section lists no more than 6 keywords."""
+        keywords_elements = extracted_elements.get('Keywords', [])
+        if not keywords_elements:
+            return
+
+        elem = keywords_elements[0]
+        text = getattr(elem, 'text', '') or ''
+        # Remove the "Keywords:" / "Keywords" label, then split on commas/semicolons
+        body = re.sub(r'^\s*keywords?\s*[:\-]?\s*', '', text, flags=re.IGNORECASE)
+        # Drop trailing period and split
+        body = body.strip().rstrip('.')
+        if not body:
+            return
+
+        keywords = [k.strip() for k in re.split(r'[,;]', body) if k.strip()]
+        count = len(keywords)
+        max_allowed = 6
+
+        elem_ref = None
+        if hasattr(elem, 'page') and hasattr(elem, 'bbox'):
+            elem_ref = [(elem.page, elem.bbox,
+                         f"Found {count} keywords; ISPRS allows a maximum of {max_allowed}")]
+
+        if count > max_allowed:
+            self.results.append(ValidationResult(
+                check_name="Keywords Count",
+                passed=False,
+                severity=Severity.WARNING,
+                message=f"Too many keywords: {count} (maximum {max_allowed})",
+                details=f"Found: {', '.join(keywords)}",
+                element_refs=elem_ref
+            ))
+        else:
+            self.results.append(ValidationResult(
+                check_name="Keywords Count",
+                passed=True,
+                severity=Severity.SUCCESS,
+                message=f"Keyword count OK: {count}",
+                details=f"Within {max_allowed}-keyword maximum"
             ))
 
     def _check_abstract_length(self, extracted_elements: Dict[str, List]):
@@ -1432,65 +1528,6 @@ class ComplianceValidator:
                     details=f"Found sub-headings: {sorted(set(sub_heading_nums))}"
                 ))
 
-        # Check heading case (should not be ALL CAPS)
-        self._check_heading_case(headings, sub_headings, extracted_elements.get('Sub_sub_Headings', []))
-
-    def _check_heading_case(self, headings: List, sub_headings: List, sub_sub_headings: List):
-        """Check that headings use proper case (not ALL CAPS)."""
-        all_caps_issues = []
-
-        # Helper to check if text (excluding numbers) is all caps
-        def is_all_caps(text: str) -> bool:
-            # Remove leading numbers and punctuation (e.g., "1. INTRODUCTION")
-            text_only = re.sub(r'^[\d\.\s]+', '', text.strip())
-            # Check if remaining text is all uppercase (and has letters)
-            alpha_chars = [c for c in text_only if c.isalpha()]
-            return len(alpha_chars) > 0 and all(c.isupper() for c in alpha_chars)
-
-        # Check all heading types
-        for heading_type, heading_list in [
-            ('Heading', headings),
-            ('Sub-heading', sub_headings),
-            ('Sub-sub-heading', sub_sub_headings)
-        ]:
-            for heading in heading_list:
-                if hasattr(heading, 'text') and is_all_caps(heading.text):
-                    elem_ref = None
-                    if hasattr(heading, 'page') and hasattr(heading, 'bbox'):
-                        elem_ref = (heading.page, heading.bbox)
-                    all_caps_issues.append({
-                        'type': heading_type,
-                        'text': heading.text[:40],
-                        'element_ref': elem_ref
-                    })
-
-        # Build element refs for highlighting
-        element_refs = []
-        for issue in all_caps_issues:
-            if issue.get('element_ref'):
-                page, bbox = issue['element_ref']
-                instance_msg = f"{issue['type']}: '{issue['text'][:30]}...' should not be ALL CAPS"
-                element_refs.append((page, bbox, instance_msg))
-
-        if all_caps_issues:
-            self.results.append(ValidationResult(
-                check_name="Heading Case Format",
-                passed=False,
-                severity=Severity.WARNING,
-                message=f"Found {len(all_caps_issues)} heading(s) using ALL CAPS",
-                details="Headings should use title case (e.g., 'Introduction' not 'INTRODUCTION')",
-                element_refs=element_refs if element_refs else None
-            ))
-        elif headings or sub_headings or sub_sub_headings:
-            total = len(headings) + len(sub_headings) + len(sub_sub_headings)
-            self.results.append(ValidationResult(
-                check_name="Heading Case Format",
-                passed=True,
-                severity=Severity.SUCCESS,
-                message="Headings use proper case formatting",
-                details=f"Checked {total} heading(s)"
-            ))
-
     def _check_element_numbering_order(
         self,
         extracted_elements: Dict[str, List],
@@ -1793,7 +1830,7 @@ class ComplianceValidator:
         page_width: float,
         citation_results: Optional[Dict] = None
     ):
-        """Check references are left-justified within their columns."""
+        """Check references are fully justified (left and right) within their columns."""
         # Use combined references from citation_results if available
         if citation_results and 'references_parsed' in citation_results:
             class RefWrapper:
@@ -1809,48 +1846,58 @@ class ComplianceValidator:
             return
 
         # Column boundaries
-        left_margin = PAGE_REQUIREMENTS['margins']['left']  # 57pt
+        left_margin = PAGE_REQUIREMENTS['margins']['left']      # 57pt
+        right_margin = PAGE_REQUIREMENTS['margins']['right']    # 57pt
         mid_page = page_width / 2
         column_gap = 17  # 6mm
 
-        # Left column left edge: left_margin (~57pt)
-        # Right column left edge: mid_page + column_gap/2 (~306pt)
-        left_col_edge = left_margin
-        right_col_edge = mid_page + column_gap / 2
+        # Left column: x ∈ [left_margin, mid_page - column_gap/2]
+        # Right column: x ∈ [mid_page + column_gap/2, page_width - right_margin]
+        left_col_left = left_margin
+        left_col_right = mid_page - column_gap / 2
+        right_col_left = mid_page + column_gap / 2
+        right_col_right = page_width - right_margin
 
-        justify_tolerance = 15  # Allow 15pt deviation
+        justify_tolerance = 15  # ±15pt for both edges
 
         alignment_issues = []
         for ref in references:
             if not ref.bbox:
                 continue
 
-            x0 = ref.bbox[0]
-            x_center = (ref.bbox[0] + ref.bbox[2]) / 2
+            x0, _, x1, _ = ref.bbox
+            x_center = (x0 + x1) / 2
 
-            # Determine which column
             if x_center < mid_page:
-                expected_x = left_col_edge
+                expected_left = left_col_left
+                expected_right = left_col_right
             else:
-                expected_x = right_col_edge
+                expected_left = right_col_left
+                expected_right = right_col_right
 
-            offset = x0 - expected_x
+            left_offset = x0 - expected_left          # positive = indented in
+            right_offset = expected_right - x1        # positive = falls short of right edge
 
-            if abs(offset) > justify_tolerance:
+            problems = []
+            if abs(left_offset) > justify_tolerance:
+                direction = "right" if left_offset > 0 else "left"
+                problems.append(f"left edge {abs(left_offset):.0f}pt too far {direction}")
+            if right_offset > justify_tolerance:
+                problems.append(f"right edge {right_offset:.0f}pt short of column edge")
+
+            if problems:
                 elem_ref = (ref.page, ref.bbox) if hasattr(ref, 'page') else None
                 alignment_issues.append({
                     'text': ref.text[:40] if hasattr(ref, 'text') else '',
-                    'offset': offset,
-                    'element_ref': elem_ref
+                    'problems': problems,
+                    'element_ref': elem_ref,
                 })
 
-        # Build element_refs with messages
         element_refs = []
         for issue in alignment_issues:
             if issue.get('element_ref'):
                 page, bbox = issue['element_ref']
-                direction = "right" if issue['offset'] > 0 else "left"
-                instance_msg = f"Reference not left-justified: {abs(issue['offset']):.0f}pt too far {direction}"
+                instance_msg = "Reference not fully justified: " + "; ".join(issue['problems'])
                 element_refs.append((page, bbox, instance_msg))
 
         if alignment_issues:
@@ -1858,8 +1905,8 @@ class ComplianceValidator:
                 check_name="Reference Justification",
                 passed=False,
                 severity=Severity.WARNING,
-                message=f"{len(alignment_issues)} reference(s) not properly left-justified",
-                details="ISPRS requires left-justified text within columns",
+                message=f"{len(alignment_issues)} reference(s) not fully justified",
+                details="ISPRS requires fully justified text (both left and right edges aligned to column boundaries)",
                 element_refs=element_refs if element_refs else None
             ))
         else:
@@ -1867,8 +1914,113 @@ class ComplianceValidator:
                 check_name="Reference Justification",
                 passed=True,
                 severity=Severity.SUCCESS,
-                message="References are properly left-justified",
+                message="References are fully justified",
                 details=f"Checked {len(references)} reference(s)"
+            ))
+
+    def _check_body_justification(
+        self,
+        extracted_elements: Dict[str, List],
+        page_width: float
+    ):
+        """Check that Main_Text paragraphs are fully (left+right) justified.
+
+        Uses the per-line spans attached to each EnrichedElement: groups spans
+        into lines by y-coordinate, then checks how many interior lines reach
+        the column right edge. The final line of a paragraph is excluded since
+        even justified text leaves the last line short.
+        """
+        main_texts = [
+            e for e in extracted_elements.get('Main_Text', [])
+            if hasattr(e, 'spans') and e.spans
+        ]
+        if not main_texts:
+            return
+
+        right_margin = PAGE_REQUIREMENTS['margins']['right']
+        mid_page = page_width / 2
+        column_gap = 17  # 6mm
+        left_col_right = mid_page - column_gap / 2
+        right_col_right = page_width - right_margin
+
+        right_edge_tolerance = 8   # ±8pt for an interior line to count as reaching the right edge
+        y_tolerance = 2.0          # pt — group spans into the same line if y0 within this
+
+        def _group_lines(spans):
+            sorted_spans = sorted(spans, key=lambda s: (s.bbox[1], s.bbox[0]))
+            lines = []
+            current = [sorted_spans[0]]
+            current_y = sorted_spans[0].bbox[1]
+            for s in sorted_spans[1:]:
+                if abs(s.bbox[1] - current_y) <= y_tolerance:
+                    current.append(s)
+                else:
+                    lines.append(current)
+                    current = [s]
+                    current_y = s.bbox[1]
+            lines.append(current)
+            return [
+                (
+                    min(s.bbox[0] for s in line),
+                    min(s.bbox[1] for s in line),
+                    max(s.bbox[2] for s in line),
+                    max(s.bbox[3] for s in line),
+                )
+                for line in lines
+            ]
+
+        flagged = []
+        element_refs = []
+        total_checked = 0
+
+        for elem in main_texts:
+            line_bboxes = _group_lines(elem.spans)
+            # Need at least 3 lines to judge justification meaningfully
+            # (single-line and 2-line paragraphs may legitimately be short)
+            if len(line_bboxes) < 3:
+                continue
+
+            total_checked += 1
+
+            elem_center_x = (elem.bbox[0] + elem.bbox[2]) / 2
+            expected_right = left_col_right if elem_center_x < mid_page else right_col_right
+
+            # Drop the last line — even justified paragraphs end short
+            interior_lines = line_bboxes[:-1]
+
+            short_lines = [
+                lb for lb in interior_lines
+                if (expected_right - lb[2]) > right_edge_tolerance
+            ]
+
+            # Flag if more than half the interior lines fall short of the right edge
+            if len(short_lines) > len(interior_lines) // 2:
+                instance_msg = (
+                    f"Body text appears not fully justified: "
+                    f"{len(short_lines)}/{len(interior_lines)} interior lines fall short of right edge"
+                )
+                flagged.append(elem)
+                element_refs.append((elem.page, elem.bbox, instance_msg))
+
+        if not total_checked:
+            return  # Not enough multi-line paragraphs to assess
+
+        if flagged:
+            self.results.append(ValidationResult(
+                check_name="Body Text Justification",
+                passed=False,
+                severity=Severity.WARNING,
+                message=f"{len(flagged)} body paragraph(s) appear not fully justified",
+                details="ISPRS requires fully justified body text (both left and right edges aligned)",
+                element_refs=element_refs if element_refs else None
+            ))
+        else:
+            self.results.append(ValidationResult(
+                check_name="Body Text Justification",
+                passed=True,
+                severity=Severity.SUCCESS,
+                message="Body text appears fully justified",
+                details=f"Checked {total_checked} multi-line paragraph(s)"
             ))
 
     def _check_page_layout(
@@ -2051,87 +2203,104 @@ class ComplianceValidator:
             ))
 
     def _check_section_spacing(self, extracted_elements: Dict[str, List]):
-        """Check vertical spacing between sections per ISPRS requirements.
+        """Check vertical spacing between sections, headings, and equations.
 
-        Highlights the gap region between sections that are too close together.
+        ISPRS requires:
+          - Authors/Affiliations -> Keywords: 2 blank lines
+          - Keywords -> Abstract: 2 blank lines
+          - Major and sub-headings: 1 blank line before AND after
+          - Sub-sub-headings: 1 blank line before (text continues on same line after)
+          - Equations: 1 blank line before AND after
         """
-        # Sort all relevant elements by page and y-position
-        section_elements = []
-        section_types = ['Title', 'Authors', 'Affiliations', 'Keywords', 'Abstract', 'Headings']
+        # Thresholds in pt. At 9pt × 1.2 line height: ~10.8pt per blank line.
+        BLANK_LINE = 10
+        DOUBLE_BLANK = 20
 
+        # Element types we care about for ordering
+        section_types = [
+            'Title', 'Authors', 'Affiliations', 'Keywords', 'Abstract',
+            'Headings', 'Sub_Headings', 'Sub_sub_Headings',
+            'Main_Text', 'Equation', 'Figure', 'Table',
+            'Figure_Title', 'Table_Title', 'References',
+        ]
+
+        elements = []
         for elem_type in section_types:
             for elem in extracted_elements.get(elem_type, []):
                 if hasattr(elem, 'bbox') and hasattr(elem, 'page'):
-                    section_elements.append((elem_type, elem))
+                    elements.append((elem_type, elem))
 
-        if len(section_elements) < 2:
+        if len(elements) < 2:
             return
 
-        # Sort by page, then y0
-        section_elements.sort(key=lambda x: (x[1].page, x[1].bbox[1]))
+        elements.sort(key=lambda x: (x[1].page, x[1].bbox[1]))
 
         spacing_issues = []
         element_refs = []
 
-        # Check gaps between consecutive section types on same page
-        for i in range(len(section_elements) - 1):
-            curr_type, curr_elem = section_elements[i]
-            next_type, next_elem = section_elements[i + 1]
+        def add_issue(curr_type, next_type, curr_elem, next_elem, gap, expected_label, threshold):
+            if gap >= threshold:
+                return
+            x0 = min(curr_elem.bbox[0], next_elem.bbox[0])
+            x1 = max(curr_elem.bbox[2], next_elem.bbox[2])
+            y0 = curr_elem.bbox[3]
+            y1 = next_elem.bbox[1]
+            if y1 - y0 < 4:
+                y0 -= 2
+                y1 += 2
+            instance_msg = (f"Spacing: {curr_type} -> {next_type}: "
+                            f"{gap:.0f}pt gap, expected {expected_label}")
+            spacing_issues.append({
+                'from': curr_type, 'to': next_type,
+                'gap': gap, 'expected': expected_label,
+            })
+            element_refs.append((curr_elem.page, (x0, y0, x1, y1), instance_msg))
+
+        for i in range(len(elements) - 1):
+            curr_type, curr_elem = elements[i]
+            next_type, next_elem = elements[i + 1]
 
             if curr_elem.page != next_elem.page:
                 continue
 
-            gap = next_elem.bbox[1] - curr_elem.bbox[3]  # y0_next - y1_curr
-            expected = None
+            gap = next_elem.bbox[1] - curr_elem.bbox[3]
 
-            # Authors/Affiliations → Keywords should have ~2 blank lines (~24pt gap)
-            if curr_type in ['Authors', 'Affiliations'] and next_type == 'Keywords':
-                if gap < 18:
-                    expected = '2 blank lines (~24pt)'
-
-            # Keywords → Abstract should have ~2 blank lines
+            # Title-block transitions: 2 blank lines required
+            if curr_type in ('Authors', 'Affiliations') and next_type == 'Keywords':
+                add_issue(curr_type, next_type, curr_elem, next_elem,
+                          gap, '2 blank lines (~22pt)', DOUBLE_BLANK)
             elif curr_type == 'Keywords' and next_type == 'Abstract':
-                if gap < 18:
-                    expected = '2 blank lines (~24pt)'
+                add_issue(curr_type, next_type, curr_elem, next_elem,
+                          gap, '2 blank lines (~22pt)', DOUBLE_BLANK)
 
-            if expected:
-                spacing_issues.append({
-                    'from': curr_type,
-                    'to': next_type,
-                    'gap': gap,
-                    'expected': expected
-                })
+            # Heading spacing: 1 blank line before any heading; 1 after major/sub headings
+            elif next_type in ('Headings', 'Sub_Headings', 'Sub_sub_Headings'):
+                add_issue(curr_type, next_type, curr_elem, next_elem,
+                          gap, '1 blank line before heading (~11pt)', BLANK_LINE)
+            elif curr_type in ('Headings', 'Sub_Headings'):
+                # Sub_sub_Headings have text on same line — no "after" rule
+                add_issue(curr_type, next_type, curr_elem, next_elem,
+                          gap, '1 blank line after heading (~11pt)', BLANK_LINE)
 
-                # Build a bbox covering the gap region between the two elements
-                # Use the wider of the two elements' horizontal span
-                x0 = min(curr_elem.bbox[0], next_elem.bbox[0])
-                x1 = max(curr_elem.bbox[2], next_elem.bbox[2])
-                y0 = curr_elem.bbox[3]      # bottom of upper element
-                y1 = next_elem.bbox[1]       # top of lower element
-
-                # If gap is tiny/negative (overlapping), expand to cover both edges
-                if y1 - y0 < 4:
-                    y0 -= 2
-                    y1 += 2
-
-                gap_bbox = (x0, y0, x1, y1)
-                instance_msg = (f"Spacing: {curr_type} -> {next_type}: "
-                                f"{gap:.0f}pt gap, expected {expected}")
-                element_refs.append((curr_elem.page, gap_bbox, instance_msg))
+            # Equation spacing: 1 blank line before and after
+            elif next_type == 'Equation':
+                add_issue(curr_type, next_type, curr_elem, next_elem,
+                          gap, '1 blank line before equation (~11pt)', BLANK_LINE)
+            elif curr_type == 'Equation':
+                add_issue(curr_type, next_type, curr_elem, next_elem,
+                          gap, '1 blank line after equation (~11pt)', BLANK_LINE)
 
         if spacing_issues:
-            details_parts = []
-            for issue in spacing_issues:
-                details_parts.append(
-                    f"{issue['from']} -> {issue['to']}: "
-                    f"{issue['gap']:.0f}pt gap (expected {issue['expected']})"
-                )
+            details_parts = [
+                f"{i['from']} -> {i['to']}: {i['gap']:.0f}pt gap (expected {i['expected']})"
+                for i in spacing_issues
+            ]
             self.results.append(ValidationResult(
                 check_name="Section Spacing",
                 passed=False,
                 severity=Severity.WARNING,
-                message=f"Insufficient spacing between sections ({len(spacing_issues)} issue(s))",
-                details="; ".join(details_parts),
+                message=f"Insufficient spacing in {len(spacing_issues)} location(s)",
+                details="; ".join(details_parts[:8]) + ("; ..." if len(details_parts) > 8 else ""),
                 element_refs=element_refs if element_refs else None
             ))
         else:
@@ -2139,8 +2308,8 @@ class ComplianceValidator:
                 check_name="Section Spacing",
                 passed=True,
                 severity=Severity.SUCCESS,
-                message="Section spacing appears correct",
-                details="Checked spacing between major sections"
+                message="Section, heading, and equation spacing appear correct",
+                details="Checked title-block, heading, and equation spacing"
             ))
 
     @staticmethod
