@@ -427,37 +427,6 @@ class CitationValidator:
             issues.append("Could not identify primary author")
             is_valid = False
 
-        # ISPRS reference format checks: "Author, A., 20xx. Title. Publication."
-        # Punctuation/order checks (skip if numbered format already flagged)
-        if not numbered_pattern and year:
-            # Use the pre-year slice of cleaned_text (preserves trailing initials/commas
-            # that author_segment.rstrip() would strip).
-            pre_year_raw = cleaned_text[:year_match.start()]
-            pre_year = pre_year_raw.rstrip()
-
-            # Personal-author refs use comma-separated "Surname, X." segments. If
-            # there are commas BEYOND the single trailing one, we're looking at a
-            # personal-author list and expect at least one initial-period token.
-            # Corporate authors like "GRASS Development Team," only have the
-            # trailing comma — skip the check for them.
-            inner_pre_year = pre_year.rstrip(',').rstrip()
-            if ',' in inner_pre_year and not re.search(r'[A-Z]\.', pre_year):
-                issues.append("Missing author initials (expected e.g. 'Smith, J.')")
-                is_valid = False
-
-            # Author segment must end (just before the year) with a comma
-            # Example correct: "Smith, J., 2020." — comma after the last initial
-            if not pre_year.endswith(','):
-                issues.append("Missing comma between author(s) and year")
-                is_valid = False
-
-            # Year must be followed by a period or colon
-            # (e.g. "..., 2020. Title" or "..., 2020: Title", optional letter suffix already in year_match)
-            after_year_idx = year_match.end()
-            if not re.match(r'\s*[\.\:]', cleaned_text[after_year_idx:after_year_idx + 4]):
-                issues.append("Missing period or colon after year (expected '..., YYYY. Title')")
-                is_valid = False
-
         return ParsedReference(
             original_text=reference_text,
             primary_surname=primary_surname,

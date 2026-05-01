@@ -2223,104 +2223,87 @@ class ComplianceValidator:
             ))
 
     def _check_section_spacing(self, extracted_elements: Dict[str, List]):
-        """Check vertical spacing between sections, headings, and equations.
+        """Check vertical spacing between sections per ISPRS requirements.
 
-        ISPRS requires:
-          - Authors/Affiliations -> Keywords: 2 blank lines
-          - Keywords -> Abstract: 2 blank lines
-          - Major and sub-headings: 1 blank line before AND after
-          - Sub-sub-headings: 1 blank line before (text continues on same line after)
-          - Equations: 1 blank line before AND after
+        Highlights the gap region between sections that are too close together.
         """
-        # Thresholds in pt. At 9pt × 1.2 line height: ~10.8pt per blank line.
-        BLANK_LINE = 10
-        DOUBLE_BLANK = 20
+        # Sort all relevant elements by page and y-position
+        section_elements = []
+        section_types = ['Title', 'Authors', 'Affiliations', 'Keywords', 'Abstract', 'Headings']
 
-        # Element types we care about for ordering
-        section_types = [
-            'Title', 'Authors', 'Affiliations', 'Keywords', 'Abstract',
-            'Headings', 'Sub_Headings', 'Sub_sub_Headings',
-            'Main_Text', 'Equation', 'Figure', 'Table',
-            'Figure_Title', 'Table_Title', 'References',
-        ]
-
-        elements = []
         for elem_type in section_types:
             for elem in extracted_elements.get(elem_type, []):
                 if hasattr(elem, 'bbox') and hasattr(elem, 'page'):
-                    elements.append((elem_type, elem))
+                    section_elements.append((elem_type, elem))
 
-        if len(elements) < 2:
+        if len(section_elements) < 2:
             return
 
-        elements.sort(key=lambda x: (x[1].page, x[1].bbox[1]))
+        # Sort by page, then y0
+        section_elements.sort(key=lambda x: (x[1].page, x[1].bbox[1]))
 
         spacing_issues = []
         element_refs = []
 
-        def add_issue(curr_type, next_type, curr_elem, next_elem, gap, expected_label, threshold):
-            if gap >= threshold:
-                return
-            x0 = min(curr_elem.bbox[0], next_elem.bbox[0])
-            x1 = max(curr_elem.bbox[2], next_elem.bbox[2])
-            y0 = curr_elem.bbox[3]
-            y1 = next_elem.bbox[1]
-            if y1 - y0 < 4:
-                y0 -= 2
-                y1 += 2
-            instance_msg = (f"Spacing: {curr_type} -> {next_type}: "
-                            f"{gap:.0f}pt gap, expected {expected_label}")
-            spacing_issues.append({
-                'from': curr_type, 'to': next_type,
-                'gap': gap, 'expected': expected_label,
-            })
-            element_refs.append((curr_elem.page, (x0, y0, x1, y1), instance_msg))
-
-        for i in range(len(elements) - 1):
-            curr_type, curr_elem = elements[i]
-            next_type, next_elem = elements[i + 1]
+        # Check gaps between consecutive section types on same page
+        for i in range(len(section_elements) - 1):
+            curr_type, curr_elem = section_elements[i]
+            next_type, next_elem = section_elements[i + 1]
 
             if curr_elem.page != next_elem.page:
                 continue
 
-            gap = next_elem.bbox[1] - curr_elem.bbox[3]
+            gap = next_elem.bbox[1] - curr_elem.bbox[3]  # y0_next - y1_curr
+            expected = None
 
-            # Title-block transitions: 2 blank lines required
-            if curr_type in ('Authors', 'Affiliations') and next_type == 'Keywords':
-                add_issue(curr_type, next_type, curr_elem, next_elem,
-                          gap, '2 blank lines (~22pt)', DOUBLE_BLANK)
+            # Authors/Affiliations → Keywords should have ~2 blank lines (~24pt gap)
+            if curr_type in ['Authors', 'Affiliations'] and next_type == 'Keywords':
+                if gap < 18:
+                    expected = '2 blank lines (~24pt)'
+
+            # Keywords → Abstract should have ~2 blank lines
             elif curr_type == 'Keywords' and next_type == 'Abstract':
-                add_issue(curr_type, next_type, curr_elem, next_elem,
-                          gap, '2 blank lines (~22pt)', DOUBLE_BLANK)
+                if gap < 18:
+                    expected = '2 blank lines (~24pt)'
 
-            # Heading spacing: 1 blank line before any heading; 1 after major/sub headings
-            elif next_type in ('Headings', 'Sub_Headings', 'Sub_sub_Headings'):
-                add_issue(curr_type, next_type, curr_elem, next_elem,
-                          gap, '1 blank line before heading (~11pt)', BLANK_LINE)
-            elif curr_type in ('Headings', 'Sub_Headings'):
-                # Sub_sub_Headings have text on same line — no "after" rule
-                add_issue(curr_type, next_type, curr_elem, next_elem,
-                          gap, '1 blank line after heading (~11pt)', BLANK_LINE)
+            if expected:
+                spacing_issues.append({
+                    'from': curr_type,
+                    'to': next_type,
+                    'gap': gap,
+                    'expected': expected
+                })
 
-            # Equation spacing: 1 blank line before and after
-            elif next_type == 'Equation':
-                add_issue(curr_type, next_type, curr_elem, next_elem,
-                          gap, '1 blank line before equation (~11pt)', BLANK_LINE)
-            elif curr_type == 'Equation':
-                add_issue(curr_type, next_type, curr_elem, next_elem,
-                          gap, '1 blank line after equation (~11pt)', BLANK_LINE)
+                # Build a bbox covering the gap region between the two elements
+                # Use the wider of the two elements' horizontal span
+                x0 = min(curr_elem.bbox[0], next_elem.bbox[0])
+                x1 = max(curr_elem.bbox[2], next_elem.bbox[2])
+                y0 = curr_elem.bbox[3]      # bottom of upper element
+                y1 = next_elem.bbox[1]       # top of lower element
+
+                # If gap is tiny/negative (overlapping), expand to cover both edges
+                if y1 - y0 < 4:
+                    y0 -= 2
+                    y1 += 2
+
+                gap_bbox = (x0, y0, x1, y1)
+                instance_msg = (f"Spacing: {curr_type} -> {next_type}: "
+                                f"{gap:.0f}pt gap, expected {expected}")
+                element_refs.append((curr_elem.page, gap_bbox, instance_msg))
 
         if spacing_issues:
-            details_parts = [
-                f"{i['from']} -> {i['to']}: {i['gap']:.0f}pt gap (expected {i['expected']})"
-                for i in spacing_issues
-            ]
+            details_parts = []
+            for issue in spacing_issues:
+                details_parts.append(
+                    f"{issue['from']} -> {issue['to']}: "
+                    f"{issue['gap']:.0f}pt gap (expected {issue['expected']})"
+                )
             self.results.append(ValidationResult(
                 check_name="Section Spacing",
                 passed=False,
                 severity=Severity.WARNING,
-                message=f"Insufficient spacing in {len(spacing_issues)} location(s)",
-                details="; ".join(details_parts[:8]) + ("; ..." if len(details_parts) > 8 else ""),
+                message=f"Insufficient spacing between sections ({len(spacing_issues)} issue(s))",
+                details="; ".join(details_parts),
                 element_refs=element_refs if element_refs else None
             ))
         else:
@@ -2328,8 +2311,8 @@ class ComplianceValidator:
                 check_name="Section Spacing",
                 passed=True,
                 severity=Severity.SUCCESS,
-                message="Section, heading, and equation spacing appear correct",
-                details="Checked title-block, heading, and equation spacing"
+                message="Section spacing appears correct",
+                details="Checked spacing between major sections"
             ))
 
     @staticmethod
