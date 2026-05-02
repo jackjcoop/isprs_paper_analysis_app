@@ -163,9 +163,15 @@ class CitationValidator:
     )
 
     # 5. "Author and Author, Year" or "Author & Author, Year" - Two authors without parentheses
+    # Optional lowercase particle prefix on the first surname (e.g. "van der Waals and Smith, 2020").
     SIMPLE_TWO_AUTHORS_PATTERN = re.compile(
-        r'\b(?P<author>[' + _CAP + r'][' + _LET + r'\-]+)'           # First author (Unicode support)
-        r'\s+(?:and|&)\s+[' + _CAP + r'][' + _LET + r'\-]+,\s*'      # and/& Second author,
+        r'(?P<author>'
+        r'(?:\b(?:van der|van den|van|von|de la|de|del|della|der|den|du|da|dos|el|la|le|ten|ter)\s+)?'
+        r'[' + _CAP + r'][' + _LET + r'\-]+'                           # First author surname
+        r')'
+        r'\s+(?:and|&)\s+'
+        r'(?:\b(?:van der|van den|van|von|de la|de|del|della|der|den|du|da|dos|el|la|le|ten|ter)\s+)?'
+        r'[' + _CAP + r'][' + _LET + r'\-]+,\s*'                       # Second author surname
         r'(?P<year>19\d{2}|20\d{2})'                # Year
         r'(?:[a-z])?'                               # Optional year suffix
     )
@@ -272,6 +278,22 @@ class CitationValidator:
 
         return citations if citations else [normalized]
 
+    @staticmethod
+    def _author_from_ner_entity(ent_text: str) -> str:
+        """Extract the first-author surname from a spaCy PERSON entity.
+
+        ISPRS citation format always puts the first author's surname at
+        the start (e.g. "Smith, 2020", "Smith et al.", "Smith and Jones").
+        spaCy may chunk multi-author or partial citation text into a
+        single entity such as "Khalid and Khan" or "Khalid and"; in both
+        cases the surname we want is what comes BEFORE the conjunction.
+        """
+        s = (ent_text or '').strip()
+        # Stop at the first conjunction
+        s = re.split(r'\s+(?:and|&)\s+', s, maxsplit=1)[0]
+        # Trim trailing punctuation/initials commonly stuck to the entity
+        return s.strip('.,;()')
+
     def _parse_citation_with_ner(self, citation_text: str) -> Tuple[str, Optional[str]]:
         """
         Parse citation using spaCy NER to handle varied formats.
@@ -289,21 +311,27 @@ class CitationValidator:
 
         doc = _nlp(citation_text)
 
-        # Extract PERSON entities (author names)
-        person_entities = [ent.text for ent in doc.ents if ent.label_ == 'PERSON']
+        # Extract PERSON entities (author names) and clean each one to
+        # its first-author surname. Reject candidates whose first token
+        # is not capitalised — that filters lowercase artefacts like
+        # "and"/"or" that spaCy occasionally hands back when it chunks
+        # multi-author citations as one entity.
+        skip_tokens = {'al', 'et', 'and', 'or', 'the', 'of', 'in'}
+        cleaned_entities: List[str] = []
+        for ent in doc.ents:
+            if ent.label_ != 'PERSON':
+                continue
+            cand = self._author_from_ner_entity(ent.text)
+            if not cand or len(cand) <= 2:
+                continue
+            first_token = cand.split()[0]
+            if first_token.lower() in skip_tokens:
+                continue
+            if not first_token[:1].isupper():
+                continue
+            cleaned_entities.append(cand)
 
-        # Filter out common false positives from "et al."
-        filtered_entities = []
-        for ent in person_entities:
-            # Extract the surname part (last word)
-            surname = ent.split()[-1].strip('.,;()')
-
-            # Skip common false positives and very short tokens
-            # "al" and "et" are from "et al."
-            if surname.lower() not in ['al', 'et'] and len(surname) > 2:
-                filtered_entities.append(ent)
-
-        person_entities = filtered_entities
+        person_entities = cleaned_entities
 
         # Extract DATE entities and look for 4-digit years
         # Pattern allows optional year suffix (e.g., 2019a, 2019b) for proper matching
@@ -321,11 +349,10 @@ class CitationValidator:
             if year_match:
                 year = year_match.group(1)
 
-        # Use first PERSON entity as primary surname
-        primary_surname = ""
-        if person_entities:
-            # Extract surname (last word of entity, cleaned)
-            primary_surname = person_entities[0].split()[-1].strip('.,;()')
+        # Use first PERSON entity as primary surname (already cleaned by
+        # _author_from_ner_entity above — multi-author chunks like
+        # "Khalid and Khan" have already been reduced to "Khalid").
+        primary_surname = person_entities[0] if person_entities else ""
 
         return primary_surname, year
 
@@ -513,11 +540,19 @@ class CitationValidator:
             if surname_only_match:
                 primary_surname = surname_only_match.group('author').strip()
 
-        # Cleanup surname (remove standard words that might get caught)
+        # Cleanup surname. Take the FIRST word as the surname for legacy
+        # multi-word artefacts (e.g. "Trotman and Faraway" -> "Trotman"),
+        # but preserve particle-prefixed surnames intact ("van der Waals"
+        # must not collapse to "van"). The particle list mirrors the one
+        # used in PARENTHETICAL_PATTERN / NARRATIVE_PATTERN.
         if primary_surname:
-            # Take FIRST word (first author convention for multi-author citations)
-            # e.g., "Trotman and Faraway" -> "Trotman"
-            primary_surname = primary_surname.split()[0]
+            parts = primary_surname.split()
+            _PARTICLES = {
+                'van', 'von', 'de', 'del', 'della', 'der', 'den',
+                'du', 'da', 'dos', 'el', 'la', 'le', 'ten', 'ter',
+            }
+            if parts and parts[0].lower() not in _PARTICLES:
+                primary_surname = parts[0]
             primary_surname = primary_surname.strip('.,;()')
 
         # Extract year suffix if present (e.g., 2019a, 2019b)
