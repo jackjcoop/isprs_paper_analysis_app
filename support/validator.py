@@ -2331,6 +2331,14 @@ class ComplianceValidator:
         spacing_issues = []
         element_refs = []
 
+        # Thresholds in points. At 9pt × 1.2 line spacing, one blank line
+        # is ~10.8pt of empty space. Two blank lines is ~21.6pt. We allow a
+        # bit of slack on either side: gaps below MIN are too few, gaps
+        # above MAX are too many.
+        MIN_TWO_BLANK = 18
+        MAX_TWO_BLANK = 35   # ~3+ blank lines
+        EXPECTED_LABEL = '2 blank lines (~22pt)'
+
         # Check gaps between consecutive section types on same page
         for i in range(len(section_elements) - 1):
             curr_type, curr_elem = section_elements[i]
@@ -2340,24 +2348,29 @@ class ComplianceValidator:
                 continue
 
             gap = next_elem.bbox[1] - curr_elem.bbox[3]  # y0_next - y1_curr
-            expected = None
 
-            # Authors/Affiliations → Keywords should have ~2 blank lines (~24pt gap)
-            if curr_type in ['Authors', 'Affiliations'] and next_type == 'Keywords':
-                if gap < 18:
-                    expected = '2 blank lines (~24pt)'
+            # Only Authors/Affiliations → Keywords and Keywords → Abstract
+            # have an explicit ISPRS spacing rule (2 blank lines).
+            applies = (
+                (curr_type in ('Authors', 'Affiliations') and next_type == 'Keywords')
+                or (curr_type == 'Keywords' and next_type == 'Abstract')
+            )
+            if not applies:
+                continue
 
-            # Keywords → Abstract should have ~2 blank lines
-            elif curr_type == 'Keywords' and next_type == 'Abstract':
-                if gap < 18:
-                    expected = '2 blank lines (~24pt)'
+            kind = None
+            if gap < MIN_TWO_BLANK:
+                kind = 'insufficient'
+            elif gap > MAX_TWO_BLANK:
+                kind = 'excessive'
 
-            if expected:
+            if kind:
                 spacing_issues.append({
                     'from': curr_type,
                     'to': next_type,
                     'gap': gap,
-                    'expected': expected
+                    'kind': kind,
+                    'expected': EXPECTED_LABEL,
                 })
 
                 # Build a bbox covering the gap region between the two elements
@@ -2373,8 +2386,10 @@ class ComplianceValidator:
                     y1 += 2
 
                 gap_bbox = (x0, y0, x1, y1)
-                instance_msg = (f"Spacing: {curr_type} -> {next_type}: "
-                                f"{gap:.0f}pt gap, expected {expected}")
+                instance_msg = (
+                    f"Spacing: {curr_type} -> {next_type}: "
+                    f"{gap:.0f}pt gap ({kind}), expected {EXPECTED_LABEL}"
+                )
                 element_refs.append((curr_elem.page, gap_bbox, instance_msg))
 
         if spacing_issues:
@@ -2382,13 +2397,20 @@ class ComplianceValidator:
             for issue in spacing_issues:
                 details_parts.append(
                     f"{issue['from']} -> {issue['to']}: "
-                    f"{issue['gap']:.0f}pt gap (expected {issue['expected']})"
+                    f"{issue['gap']:.0f}pt gap ({issue['kind']}, expected {issue['expected']})"
                 )
+            kinds = {i['kind'] for i in spacing_issues}
+            if kinds == {'insufficient'}:
+                msg = f"Insufficient spacing between sections ({len(spacing_issues)} issue(s))"
+            elif kinds == {'excessive'}:
+                msg = f"Excessive spacing between sections ({len(spacing_issues)} issue(s))"
+            else:
+                msg = f"Spacing issues between sections ({len(spacing_issues)} issue(s))"
             self.results.append(ValidationResult(
                 check_name="Section Spacing",
                 passed=False,
                 severity=Severity.WARNING,
-                message=f"Insufficient spacing between sections ({len(spacing_issues)} issue(s))",
+                message=msg,
                 details="; ".join(details_parts),
                 element_refs=element_refs if element_refs else None
             ))
