@@ -1049,9 +1049,21 @@ class PDFComplianceAnalyzer:
         # URL
         if re.search(r'https?://[^\s]+\.?\s*$', text):
             return True
-        # Year with period: "2020."
+        # Year with period: "2020." — but only treat as complete when it
+        # does NOT immediately follow an author-list tail. A reference like
+        #     "Caesar, H., ..., Beijbom, O., 2020."
+        # ends with year+period because the title was cut off at the page
+        # boundary; the actual content continues on the next page. Detect
+        # the truncation by looking for "Surname, I., YYYY.$".
         if re.search(r'\b(19|20)\d{2}[a-z]?\.\s*$', text):
-            return True
+            truncated_at_year = re.search(
+                r'[A-ZÀ-ÖØ-ÞĀ-ɏ][a-zA-ZÀ-ÖØ-öø-ÿĀ-ɏ\-\']+'  # Surname
+                r',\s+[A-Z](?:\.\s*[A-Z])*\.'                # Initial(s)
+                r',?\s*\b(19|20)\d{2}[a-z]?\.\s*$',          # Year + period at end
+                text,
+            )
+            if not truncated_at_year:
+                return True
         # Year in parentheses with trailing period: "(2020)." or "(2020a)."
         if re.search(r'\((19|20)\d{2}[a-z]?\)\.\s*$', text):
             return True
