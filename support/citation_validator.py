@@ -185,6 +185,18 @@ class CitationValidator:
         r'|[' + _CAP + r']'
     )
 
+    # Editor-continuation detector. A book-chapter reference body looks like:
+    #     ..., in: Awe, O.O., A. Vance, E. (Eds.), Practical ...
+    # Inside the editor list the comma+initial+period sequence looks like a
+    # reference boundary, so the merge-splitter can produce a false positive.
+    # If the first ~100 chars after a candidate split contain "(Eds.)" /
+    # "(Ed.)" / "editors", it is a co-editor continuation rather than a new
+    # bibliography entry.
+    _EDITOR_CONTINUATION_RE = re.compile(
+        r'^.{0,100}?(?:\(\s*Eds?\.?\s*\)|\beditors?\b)',
+        re.IGNORECASE | re.DOTALL,
+    )
+
     def __init__(self):
         self.figure_patterns = [re.compile(r'\bFig(ure)?\.?\s*(\d+)', re.IGNORECASE)]
         self.table_patterns = [re.compile(r'\bTable\s*(\d+)', re.IGNORECASE)]
@@ -1149,12 +1161,22 @@ class CitationValidator:
                 result.append(elem)
                 continue
 
-            # Validate: text after split must contain a year within 300 chars
+            # Validate each candidate split:
+            #   (a) text after split must contain a year within 300 chars,
+            #   (b) the chunk after the split must not look like a co-editor
+            #       continuation ('.. (Eds.), Title ..'). A book-chapter ref
+            #       like 'in: Awe, O.O., A. Vance, E. (Eds.), Practical ...'
+            #       has the comma+initial+period split pattern internally,
+            #       but the text after the split is just the next editor's
+            #       name followed by '(Eds.)' / '(Ed.)' / 'editors,'.
             valid_positions = []
             for m in splits:
                 after = cleaned[m.end():m.end() + 300]
-                if re.search(r'\b(19\d{2}|20\d{2})\b', after):
-                    valid_positions.append(m.end())
+                if not re.search(r'\b(19\d{2}|20\d{2})\b', after):
+                    continue
+                if self._EDITOR_CONTINUATION_RE.match(after):
+                    continue
+                valid_positions.append(m.end())
 
             if not valid_positions:
                 result.append(elem)
