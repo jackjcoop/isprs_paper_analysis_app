@@ -991,6 +991,42 @@ class ComplianceValidator:
         normalized = re.sub(r'[\s\-_]', '', font_name).lower()
         return any(alias in normalized for alias in TIMES_FONT_ALIASES)
 
+    def _spans_distributed_across_columns(self, elem, page_width: float) -> bool:
+        """Return True if a wide element's text spans straddle the page
+        midpoint with substantial content on both sides.
+
+        Document AI sometimes returns a single Main_Text bbox covering the
+        full content area when the underlying paragraphs were actually
+        rendered in two columns. The extracted spans still carry per-line
+        bboxes, so we can detect this case by counting characters on each
+        side of the page midpoint. If both sides hold substantial text,
+        treat the element as legitimately two-column and skip the column-
+        layout warning.
+        """
+        spans = getattr(elem, 'spans', None) or []
+        if not spans:
+            return False
+
+        mid = page_width / 2
+        left_chars = 0
+        right_chars = 0
+        for s in spans:
+            text = (getattr(s, 'text', '') or '')
+            stripped = text.strip()
+            if not stripped:
+                continue
+            x_center = (s.bbox[0] + s.bbox[2]) / 2
+            if x_center < mid:
+                left_chars += len(stripped)
+            else:
+                right_chars += len(stripped)
+
+        # Require meaningful content (at least ~one line of body text) on
+        # both sides — guards against e.g. equations or section titles whose
+        # spans happen to drift slightly across the midpoint.
+        MIN_PER_COLUMN = 30
+        return left_chars >= MIN_PER_COLUMN and right_chars >= MIN_PER_COLUMN
+
     def _has_bold_heading_prefix(self, spans) -> bool:
         """Return True if the leading consecutive bold spans of an element
         form a sub-sub-heading prefix (i.e. start with the `N.N.N` numbering
@@ -2236,8 +2272,15 @@ class ComplianceValidator:
 
                 elem_width = elem.bbox[2] - elem.bbox[0]
 
-                # If element is too wide (spans across column gap), flag it
+                # If element is too wide (spans across column gap), flag it —
+                # unless the underlying spans are clearly distributed across
+                # both columns. Document AI occasionally returns a single
+                # Main_Text bbox that visually wraps text from both columns;
+                # in those cases the text is correctly two-column even though
+                # the bbox isn't.
                 if elem_width > max_two_column_width:
+                    if self._spans_distributed_across_columns(elem, page_width):
+                        continue
                     layout_issues.append({
                         'type': elem_type,
                         'page': elem_page,
