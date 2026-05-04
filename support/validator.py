@@ -69,7 +69,7 @@ PAGE_REQUIREMENTS = {
         'right': 57,         # 20mm
     },
     'min_pages': 6,
-    'max_pages': 8,
+    'max_pages': 10,
 }
 
 ABSTRACT_REQUIREMENTS = {
