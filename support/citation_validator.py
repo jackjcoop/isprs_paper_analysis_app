@@ -879,6 +879,17 @@ class CitationValidator:
         # the underlying citation. Each defect is recorded so the validator
         # can flag it as a citation-format issue separately from matching.
         format_issues: List[str] = []
+        # Strip corporate suffixes that follow a company name ("Agisoft LLC,
+        # 2024", "Acme Corp., 2024"). Without this, SIMPLE_COMMA_PATTERN
+        # greedily matches the suffix as the surname ("LLC, 2024"). The
+        # repair is silent — a corporate citation is correctly formatted,
+        # just inconvenient for our regex flow.
+        corporate_suffix_re = re.compile(
+            r'\s+(?:LLC|Inc\.?|Ltd\.?|Corp\.?|Co\.?|GmbH|S\.\s?A\.?'
+            r'|N\.\s?V\.?|AG|PLC|LLP|Pty\.?\s*Ltd\.?)(?=[,\s])',
+            re.IGNORECASE,
+        )
+        normalized_text = corporate_suffix_re.sub('', normalized_text)
         # "at el.", "at al.", "et el." — common typos for "et al.". Repair
         # them so the citation can still be matched, and record the issue
         # so the format check surfaces it.
