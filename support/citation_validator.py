@@ -1591,6 +1591,44 @@ class CitationValidator:
                     'page': elem.page
                 })
 
+        # Fallback: if Document AI extracted more {Figure,Table}_Title
+        # elements than {Figure,Table}_Number elements, infer the missing
+        # numbers from the titles' reading-order position. ISPRS papers
+        # number figures/tables sequentially (1..N) in the order they
+        # appear, so the i-th title (1-indexed) corresponds to item #i.
+        title_key = f"{float_type}_Title"
+        title_elements = extracted_elements.get(title_key, []) or []
+
+        def _title_reading_order(e):
+            page = getattr(e, 'page', 0) or 0
+            bb = getattr(e, 'bbox', None)
+            y = bb[1] if bb else 0
+            return (page, y)
+
+        sorted_titles = sorted(title_elements, key=_title_reading_order)
+        for i, title in enumerate(sorted_titles, start=1):
+            str_i = str(i)
+            if str_i in floats_by_number:
+                continue
+            title_bbox = getattr(title, 'bbox', None)
+            if hasattr(title_bbox, 'x0'):
+                title_bbox = (title_bbox.x0, title_bbox.y0, title_bbox.x1, title_bbox.y1)
+            title_page = getattr(title, 'page', 0)
+            floats_by_number[str_i] = {
+                'number': str_i,
+                'page': title_page,
+                'text': f'(inferred from {title_key})',
+                'bbox': title_bbox,
+                'title_text': getattr(title, 'text', '') or '',
+                'title_bbox': title_bbox,
+                'cited': False,
+                'citations': []
+            }
+            results['figures' if float_type == 'Figure' else 'tables'].append({
+                'number': str_i,
+                'page': title_page
+            })
+
         # Parse citations — extract ALL numbers from compound references
         # e.g. "Tables 2 and 3" or "Figures 1, 2, and 3" should cite every number
         cited_numbers = set()
