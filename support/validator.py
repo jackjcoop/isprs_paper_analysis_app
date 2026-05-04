@@ -1772,15 +1772,32 @@ class ComplianceValidator:
             ))
 
         # Check heading numbering sequence
-        heading_nums = []
+        heading_nums = set()
         heading_pattern = re.compile(r'^(\d+)\.\s+')
         for h in headings:
             match = heading_pattern.match(h.text.strip())
             if match:
-                heading_nums.append(int(match.group(1)))
+                heading_nums.add(int(match.group(1)))
+
+        # Infer parent heading presence from sub-headings: if "5.1 Results"
+        # exists then heading "5" must exist in the paper, even if Document
+        # AI missed classifying it as a Headings element. This avoids false
+        # "missing heading 5" warnings caused by extraction gaps rather than
+        # actual numbering gaps.
+        sub_parent_pattern = re.compile(r'^(\d+)\.(\d+)')
+        for sh in extracted_elements.get('Sub_Headings', []):
+            text = getattr(sh, 'text', '') or ''
+            match = sub_parent_pattern.match(text.strip())
+            if match:
+                heading_nums.add(int(match.group(1)))
+        for ssh in extracted_elements.get('Sub_sub_Headings', []):
+            text = getattr(ssh, 'text', '') or ''
+            match = sub_parent_pattern.match(text.strip())
+            if match:
+                heading_nums.add(int(match.group(1)))
 
         if heading_nums:
-            heading_nums_sorted = sorted(set(heading_nums))
+            heading_nums_sorted = sorted(heading_nums)
             expected = list(range(1, max(heading_nums_sorted) + 1))
             missing = set(expected) - set(heading_nums_sorted)
 
