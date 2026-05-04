@@ -2215,14 +2215,24 @@ class ComplianceValidator:
             for i in range(len(surnames_only) - 1):
                 if surnames_only[i] > surnames_only[i + 1]:
                     out_of_order.append((ref_data[i]['surname'], ref_data[i + 1]['surname']))
-                    # Add both the out-of-order reference and the one it should come after
+                    # Add both the out-of-order reference and the one it should come after.
+                    # Spell out the alphabetical-order requirement so reviewers
+                    # see the rule in context, not just the misorder pair.
                     if ref_data[i]['element_ref']:
                         page, bbox = ref_data[i]['element_ref']
-                        instance_msg = f"Reference '{ref_data[i]['surname']}' should come after '{ref_data[i + 1]['surname']}'"
+                        instance_msg = (
+                            f"References must be listed in alphabetical order: "
+                            f"'{ref_data[i]['surname']}' should come after "
+                            f"'{ref_data[i + 1]['surname']}'"
+                        )
                         element_refs.append((page, bbox, instance_msg))
                     if ref_data[i + 1]['element_ref']:
                         page, bbox = ref_data[i + 1]['element_ref']
-                        instance_msg = f"Reference '{ref_data[i + 1]['surname']}' should come before '{ref_data[i]['surname']}'"
+                        instance_msg = (
+                            f"References must be listed in alphabetical order: "
+                            f"'{ref_data[i + 1]['surname']}' should come before "
+                            f"'{ref_data[i]['surname']}'"
+                        )
                         element_refs.append((page, bbox, instance_msg))
 
             if out_of_order:
@@ -2239,7 +2249,7 @@ class ComplianceValidator:
                     passed=False,
                     severity=Severity.WARNING,
                     message=msg,
-                    details=pairs_str,
+                    details=f"References must be in alphabetical order. {pairs_str}",
                     element_refs=element_refs if element_refs else None
                 ))
         else:
