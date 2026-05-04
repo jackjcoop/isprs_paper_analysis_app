@@ -344,11 +344,11 @@ class CitationValidator:
         # leading text (axis tick values like "200 400 600 800"). Real
         # references rarely carry 5+ bare numbers within the first 150
         # chars; skip the check entirely if the text already opens with a
-        # plausible author-list pattern ("Surname, I." or
-        # "Organisation Name, YEAR") so titles that legitimately contain
-        # numerals don't false-match.
+        # plausible author-list pattern ("Surname, I." / "Surname, I," with
+        # missing period / "Organisation Name, YEAR") so titles that
+        # legitimately contain numerals don't false-match.
         starts_with_author = bool(re.match(
-            r'^[A-ZÀ-ɏ][a-zA-ZÀ-ɏ\-\'’ ]+,\s+(?:[A-Z]\.|[A-Z][a-z]+,\s+\d{4})',
+            r'^[A-ZÀ-ɏ][a-zA-ZÀ-ɏ\-\'’ ]+,\s+(?:[A-Z]\.?[,\s]|\d{4})',
             head,
         ))
         if not starts_with_author:
