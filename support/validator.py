@@ -539,46 +539,76 @@ class ComplianceValidator:
         return malformed_texts
 
     def _check_citation_spacing_format(self, citation_results: Dict) -> None:
-        """Surface citation spacing/punctuation defects (e.g. "et al.2021",
-        "Smith,2020") as a "Citation Format" warning. The lenient parser
-        repairs these defects so the citation can still match against the
-        bibliography; this check exists so the original formatting issue is
-        still visible to the reviewer.
+        """Surface citation format defects recorded by the lenient parser.
+        Splits typo-class issues (e.g. "at el." for "et al.") from spacing/
+        punctuation issues so each gets its own dedicated check.
         """
         citations_parsed = citation_results.get('citations_parsed', [])
-        element_refs = []
-        details_parts = []
-        seen = set()
+
+        typo_refs = []
+        typo_details = []
+        spacing_refs = []
+        spacing_details = []
+        seen_typo: set = set()
+        seen_spacing: set = set()
+
         for cit in citations_parsed:
             if cit.citation_type != 'reference':
                 continue
             issues = getattr(cit, 'format_issues', None) or []
             if not issues:
                 continue
-            key = (cit.text, tuple(issues))
-            if key in seen:
-                continue
-            seen.add(key)
-            issue_str = '; '.join(issues)
             label = f"'{cit.text[:50]}{'...' if len(cit.text) > 50 else ''}'"
-            details_parts.append(f"{label}: {issue_str}")
-            if cit.bbox:
-                element_refs.append((
-                    cit.page,
-                    cit.bbox,
-                    f"Citation '{cit.text}' formatting issue: {issue_str}",
-                ))
 
-        if details_parts:
-            shown = details_parts[:8]
-            suffix = f' (and {len(details_parts) - 8} more)' if len(details_parts) > 8 else ''
+            typo_issues = [i for i in issues if i.lower().startswith('typo')]
+            other_issues = [i for i in issues if not i.lower().startswith('typo')]
+
+            if typo_issues:
+                key = (cit.text, tuple(typo_issues))
+                if key not in seen_typo:
+                    seen_typo.add(key)
+                    typo_details.append(f"{label}: {'; '.join(typo_issues)}")
+                    if cit.bbox:
+                        typo_refs.append((
+                            cit.page, cit.bbox,
+                            f"Citation '{cit.text}' typo: {'; '.join(typo_issues)}",
+                        ))
+            if other_issues:
+                key = (cit.text, tuple(other_issues))
+                if key not in seen_spacing:
+                    seen_spacing.add(key)
+                    spacing_details.append(f"{label}: {'; '.join(other_issues)}")
+                    if cit.bbox:
+                        spacing_refs.append((
+                            cit.page, cit.bbox,
+                            f"Citation '{cit.text}' formatting issue: {'; '.join(other_issues)}",
+                        ))
+
+        def _truncate(parts, refs):
+            shown = parts[:8]
+            suffix = f' (and {len(parts) - 8} more)' if len(parts) > 8 else ''
+            return shown, suffix
+
+        if typo_details:
+            shown, suffix = _truncate(typo_details, typo_refs)
+            self.results.append(ValidationResult(
+                check_name="Citation Typo",
+                passed=False,
+                severity=Severity.WARNING,
+                message=f"Found {len(typo_details)} citation(s) with typos (e.g. 'at el.' instead of 'et al.')",
+                details=f"Affected: {'; '.join(shown)}{suffix}",
+                element_refs=typo_refs if typo_refs else None,
+            ))
+
+        if spacing_details:
+            shown, suffix = _truncate(spacing_details, spacing_refs)
             self.results.append(ValidationResult(
                 check_name="Citation Format",
                 passed=False,
                 severity=Severity.WARNING,
-                message=f"Found {len(details_parts)} citation(s) with spacing/punctuation issues",
+                message=f"Found {len(spacing_details)} citation(s) with spacing/punctuation issues",
                 details=f"Affected: {'; '.join(shown)}{suffix}",
-                element_refs=element_refs if element_refs else None,
+                element_refs=spacing_refs if spacing_refs else None,
             ))
 
     def _check_numeric_style_citations(self, citation_results: Dict) -> set:
