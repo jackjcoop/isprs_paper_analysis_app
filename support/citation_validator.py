@@ -165,6 +165,8 @@ class CitationValidator:
 
     # 5. "Author and Author, Year" or "Author & Author, Year" - Two authors without parentheses
     # Optional lowercase particle prefix on the first surname (e.g. "van der Waals and Smith, 2020").
+    # Second surname can be 1–3 capitalised words to cover compound or
+    # Korean-style names like "Hee Lee".
     SIMPLE_TWO_AUTHORS_PATTERN = re.compile(
         r'(?P<author>'
         r'(?:\b(?:van der|van den|van|von|de la|de|del|della|der|den|du|da|dos|el|la|le|ten|ter)\s+)?'
@@ -172,7 +174,8 @@ class CitationValidator:
         r')'
         r'\s+(?:and|&)\s+'
         r'(?:\b(?:van der|van den|van|von|de la|de|del|della|der|den|du|da|dos|el|la|le|ten|ter)\s+)?'
-        r'[' + _CAP + r'][' + _LET + r'\-]+,\s*'                       # Second author surname
+        r'(?:[' + _CAP + r'][' + _LET + r'\-]+\s+){0,2}'                # Optional 0-2 leading capitalised tokens
+        r'[' + _CAP + r'][' + _LET + r'\-]+,\s*'                       # Final surname token of second author
         r'(?P<year>19\d{2}|20\d{2})'                # Year
         r'(?:[a-z])?'                               # Optional year suffix
     )
