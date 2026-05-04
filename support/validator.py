@@ -137,6 +137,7 @@ class ComplianceValidator:
     def __init__(self):
         """Initialize validator."""
         self.results: List[ValidationResult] = []
+        self._pdf_path: Optional[str] = None
 
     def validate(
         self,
@@ -146,7 +147,8 @@ class ComplianceValidator:
         figure_table_results: Optional[Dict] = None,
         anonymization_result: Optional[Any] = None,
         page_count: Optional[int] = None,
-        page_dimensions: Optional[Tuple[float, float]] = None
+        page_dimensions: Optional[Tuple[float, float]] = None,
+        pdf_path: Optional[str] = None,
     ) -> Tuple[bool, List[ValidationResult]]:
         """
         Validate extracted elements against schema requirements.
@@ -164,6 +166,7 @@ class ComplianceValidator:
             Tuple of (overall_pass, list_of_validation_results)
         """
         self.results = []
+        self._pdf_path = pdf_path
 
         # Check required once elements
         self._check_required_once(extracted_elements)
@@ -2561,6 +2564,48 @@ class ComplianceValidator:
                 message="Column layout conforms to ISPRS requirements"
             ))
 
+    def _gap_contains_commission_line(self, upper_elem, lower_elem) -> bool:
+        """Scan the gap between two elements with PyMuPDF and return True if
+        an ISPRS "Commission" / "Working Group" designation line is present.
+
+        Used by the section-spacing check to relax the Affiliations->Keywords
+        gap when the Commission line wasn't extracted as its own element.
+        """
+        if self._pdf_path is None:
+            return False
+        try:
+            from support.pymupdf_extractor import PyMuPDFExtractor
+        except Exception:
+            return False
+        page = getattr(upper_elem, 'page', None)
+        if page is None or page != getattr(lower_elem, 'page', None):
+            return False
+        upper_bbox = getattr(upper_elem, 'bbox', None)
+        lower_bbox = getattr(lower_elem, 'bbox', None)
+        if not upper_bbox or not lower_bbox:
+            return False
+        # Use a wide x-range to catch the Commission line which can be
+        # centered or left-aligned and may extend past the affiliation block.
+        x0 = min(upper_bbox[0], lower_bbox[0]) - 30
+        x1 = max(upper_bbox[2], lower_bbox[2]) + 30
+        y0 = upper_bbox[3]
+        y1 = lower_bbox[1]
+        if y1 - y0 < 4:
+            return False
+        try:
+            with PyMuPDFExtractor(self._pdf_path) as extractor:
+                spans = extractor.extract_text_from_bbox(page, (x0, y0, x1, y1))
+        except Exception:
+            return False
+        text = ' '.join(getattr(s, 'text', '') or '' for s in spans).lower()
+        # Look for "commission" or the working-group designation pattern
+        # ("WG II/3", "ICWG II/III"). One of these is a strong signal.
+        if 'commission' in text:
+            return True
+        if re.search(r'\b(?:icwg|wg)\b\s*[IVX]+(?:\s*/\s*[IVXa-z0-9]+)?', text, re.IGNORECASE):
+            return True
+        return False
+
     def _check_section_spacing(self, extracted_elements: Dict[str, List]):
         """Check vertical spacing between sections per ISPRS requirements.
 
@@ -2604,16 +2649,11 @@ class ComplianceValidator:
         MIN_FULL_KEY_TO_ABSTRACT = 30
         MAX_FULL_KEY_TO_ABSTRACT = 60
         FULL_KEY_TO_ABSTRACT_LABEL = '2 blank lines + Abstract label + 1 blank line (~45pt)'
-        # Affiliations -> Keywords: ISPRS papers typically include a
-        # Commission/Working Group designation line between affiliations and
-        # keywords (e.g. "Commission III, WG III/2"). Document AI rarely
-        # extracts that line as its own element, so the visible gap can be
-        # ~22pt (no Commission line) up to ~55pt (blank + Commission + 2
-        # blanks). Allow the wider range so conforming papers don't trip on
-        # the missing-element extraction.
-        MIN_AFFIL_TO_KEYWORDS = MIN_TWO_BLANK
-        MAX_AFFIL_TO_KEYWORDS = 60
-        AFFIL_TO_KEYWORDS_LABEL = '2 blank lines (~22pt), or with optional Commission line (~45pt)'
+        # Affiliations -> Keywords: when an "ISPRS Commission" / "Working
+        # Group" designation line sits in the gap (Document AI rarely
+        # extracts it), allow up to ~55pt (blank + Commission + 2 blanks).
+        # Otherwise apply the strict 2-blank-lines range.
+        MAX_AFFIL_TO_KEYWORDS_WITH_COMMISSION = 60
 
         # Whether an Abstract_title element is present — controls fallback
         # expectations when Keywords is followed directly by Abstract body.
@@ -2637,9 +2677,15 @@ class ComplianceValidator:
             #                                            line + 1 blank line
             min_gap = max_gap = expected_label = None
             if curr_type in ('Authors', 'Affiliations') and next_type == 'Keywords':
-                min_gap, max_gap, expected_label = (
-                    MIN_AFFIL_TO_KEYWORDS, MAX_AFFIL_TO_KEYWORDS, AFFIL_TO_KEYWORDS_LABEL
-                )
+                min_gap, max_gap, expected_label = MIN_TWO_BLANK, MAX_TWO_BLANK, TWO_BLANK_LABEL
+                # If the visible gap exceeds the strict max, check whether a
+                # Commission / Working Group line sits in the gap. If so,
+                # extend the max to cover the extra ~22pt that line takes.
+                if (gap > MAX_TWO_BLANK
+                        and self._pdf_path is not None
+                        and self._gap_contains_commission_line(curr_elem, next_elem)):
+                    max_gap = MAX_AFFIL_TO_KEYWORDS_WITH_COMMISSION
+                    expected_label = '2 blank lines + Commission line + 2 blank lines (~45pt)'
             elif curr_type == 'Keywords' and next_type == 'Abstract_title':
                 min_gap, max_gap, expected_label = MIN_TWO_BLANK, MAX_TWO_BLANK, TWO_BLANK_LABEL
             elif curr_type == 'Abstract_title' and next_type == 'Abstract':

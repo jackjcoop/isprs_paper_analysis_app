@@ -209,7 +209,8 @@ class PDFComplianceAnalyzer:
                 figure_table_results=figure_table_results,
                 anonymization_result=anonymization_result,
                 page_count=page_count,
-                page_dimensions=page_dimensions
+                page_dimensions=page_dimensions,
+                pdf_path=pdf_path,
             )
 
         # Step 9: Display results
