@@ -2790,7 +2790,14 @@ class ComplianceValidator:
             elif curr_type == 'Keywords' and next_type == 'Abstract_title':
                 min_gap, max_gap, expected_label = MIN_TWO_BLANK, MAX_TWO_BLANK, TWO_BLANK_LABEL
             elif curr_type == 'Abstract_title' and next_type == 'Abstract':
-                min_gap, max_gap, expected_label = MIN_ONE_BLANK, MAX_ONE_BLANK, ONE_BLANK_LABEL
+                # ISPRS allows two equally valid layouts here:
+                #   (a) "ABSTRACT: Currently, ..."  — body inline with label
+                #   (b) "ABSTRACT:\nCurrently, ..." — body on the next line
+                # Both result in a near-zero visible gap between the label
+                # bbox and the body bbox. Only flag when the gap is so large
+                # it implies missing content — i.e. extend the lower bound
+                # down to 0.
+                min_gap, max_gap, expected_label = 0, MAX_ONE_BLANK, '0 to 1 blank line (inline or next line)'
             elif curr_type == 'Keywords' and next_type == 'Abstract' and not has_abstract_title:
                 # No Abstract_title detected — the "Abstract" label still
                 # exists visually between Keywords and the abstract body,
