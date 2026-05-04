@@ -2470,6 +2470,33 @@ class ComplianceValidator:
             if self._looks_like_bullet_list(elem_text):
                 continue
 
+            # Skip paragraphs that contain a displayed equation/math line.
+            # When a centered formula (whether or not Document AI extracted
+            # it as an Equation) is embedded in body text, the equation
+            # line and the lead-in/lead-out lines around it legitimately
+            # fall short of the column edge. Group spans into rough lines
+            # and flag the paragraph if any single line is majority
+            # math-font characters.
+            def _line_is_math(spans_in_line) -> bool:
+                math_c = sum(
+                    len(getattr(s, 'text', '') or '')
+                    for s in spans_in_line
+                    if self._font_is_math(getattr(s, 'font_name', '') or '')
+                )
+                total_c = sum(
+                    len(getattr(s, 'text', '') or '') for s in spans_in_line
+                )
+                return total_c > 0 and (math_c / total_c) > 0.5
+
+            from collections import defaultdict as _dd
+            lines_by_y = _dd(list)
+            for s in elem.spans:
+                if not (hasattr(s, 'bbox') and s.bbox):
+                    continue
+                lines_by_y[round(s.bbox[1] / 4)].append(s)
+            if any(_line_is_math(line_spans) for line_spans in lines_by_y.values()):
+                continue
+
             line_bboxes = _group_lines(elem.spans)
             # Need at least 3 lines to judge justification meaningfully
             # (single-line and 2-line paragraphs may legitimately be short)
