@@ -94,6 +94,9 @@ class ReportGenerator:
         self.validation_results = validation_results
         self.enriched_elements = enriched_elements
         self.overall_pass = overall_pass
+        # Single timestamp shared by the summary page subtitle and the
+        # date stamped on each comment annotation.
+        self._generation_time = datetime.now()
 
     def generate_report(self, output_path: Optional[str] = None) -> str:
         """
@@ -291,11 +294,13 @@ class ReportGenerator:
         )
         annot.set_colors(stroke=color)
 
-        # Strip the date/author metadata that PDF readers display in the
-        # comment popup header — the user requested no dates on comments.
+        # Stamp the same generation timestamp on every comment so the
+        # popup header date matches the "Generated:" line on the summary
+        # page. Author/title field is cleared since we don't have one.
+        pdf_date = self._generation_time.strftime("D:%Y%m%d%H%M%S")
         info = annot.info
-        info["creationDate"] = ""
-        info["modDate"] = ""
+        info["creationDate"] = pdf_date
+        info["modDate"] = pdf_date
         info["title"] = ""
         annot.set_info(info)
 
@@ -314,7 +319,7 @@ class ReportGenerator:
         passed = [r for r in self.validation_results if r.passed]
 
         # 1. Header box with status
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        timestamp = self._generation_time.strftime("%Y-%m-%d %H:%M:%S")
         subtitle = f"Document: {Path(self.pdf_path).name}    Generated: {timestamp}"
         status_text = "PASSED" if self.overall_pass else "WARNINGS FOUND"
 
