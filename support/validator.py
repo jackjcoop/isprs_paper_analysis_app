@@ -1930,6 +1930,25 @@ class ComplianceValidator:
                     if curr_page == next_page:
                         is_out_of_order = False
 
+                # Tolerate column-flow ambiguity: a column-aware sort can put
+                # an element with a *lower* y after one with a *higher* y on
+                # the same page (e.g. left-column bottom sorts after right-
+                # column top). When that happens, the apparent disorder is
+                # created by the column split, not by the author's numbering
+                # — the simple top-to-bottom (page, y) order still matches
+                # the numerical order. Skip the flag in that case. Real
+                # authoring mistakes (higher-numbered element visually above
+                # a lower-numbered one in the same column) keep curr_y <=
+                # next_y and are still flagged.
+                if is_out_of_order:
+                    curr_page = getattr(curr['elem'], 'page', None)
+                    next_page = getattr(next_item['elem'], 'page', None)
+                    if curr_page is not None and curr_page == next_page:
+                        curr_y = curr['elem'].bbox[1] if getattr(curr['elem'], 'bbox', None) else None
+                        next_y = next_item['elem'].bbox[1] if getattr(next_item['elem'], 'bbox', None) else None
+                        if curr_y is not None and next_y is not None and curr_y > next_y:
+                            is_out_of_order = False
+
                 if is_out_of_order:
                     elem_ref = None
                     if hasattr(next_item['elem'], 'page') and hasattr(next_item['elem'], 'bbox'):
