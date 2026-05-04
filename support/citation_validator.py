@@ -434,15 +434,18 @@ class CitationValidator:
     @staticmethod
     def _fix_line_break_hyphens(text: str) -> str:
         """Fix hyphens introduced by line breaks in PDF extraction.
-        E.g., 'Shah- mohamadi' -> 'Shahmohamadi'.
+        E.g., 'Shah- mohamadi' -> 'Shahmohamadi', 'Le-\\ndoux' -> 'Ledoux'.
 
-        Only merge when the character after the space is lowercase — a
-        capitalized word after the hyphen typically signals a new
+        Only merge when the character after the whitespace is lowercase —
+        a capitalized word after the hyphen typically signals a new
         sentence or proper noun (e.g. 'data- Caesar' is *not* a
         hyphenation break) and merging across that boundary destroys
         downstream reference parsing.
         """
-        return re.sub(r'(\w)- ([a-zà-öø-ÿā-ɏ])', r'\1\2', text)
+        # Use \s+ to match any whitespace (space, newline, etc.) — PDF
+        # extractors sometimes preserve the original line break instead of
+        # collapsing it to a space.
+        return re.sub(r'(\w)-\s+([a-zà-öø-ÿā-ɏ])', r'\1\2', text)
 
     # Author-year reference pattern used to find the start of a real
     # reference inside an element that Document AI bundled with non-
