@@ -816,6 +816,18 @@ class CitationValidator:
         # the underlying citation. Each defect is recorded so the validator
         # can flag it as a citation-format issue separately from matching.
         format_issues: List[str] = []
+        # "at el.", "at al.", "et el." — common typos for "et al.". Repair
+        # them so the citation can still be matched, and record the issue
+        # so the format check surfaces it.
+        et_al_typo_re = re.compile(
+            r'\b(at\s+el|at\s+al|et\s+el)\b\.?',
+            re.IGNORECASE,
+        )
+        typo_match = et_al_typo_re.search(normalized_text)
+        if typo_match:
+            wrong = typo_match.group(0)
+            format_issues.append(f"Typo '{wrong}' (should be 'et al.')")
+            normalized_text = et_al_typo_re.sub('et al.', normalized_text)
         # "et al.YEAR" — period of "al." touches the year (no space/comma).
         # Insert ", " so the existing "et al., YEAR" patterns recognize it.
         if re.search(r'\bal\.(?=\d{4}\b)', normalized_text):
