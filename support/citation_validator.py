@@ -348,7 +348,11 @@ class CitationValidator:
         # missing period / "Organisation Name, YEAR") so titles that
         # legitimately contain numerals don't false-match.
         starts_with_author = bool(re.match(
-            r'^[A-ZÀ-ɏ][a-zA-ZÀ-ɏ\-\'’ ]+,\s+(?:[A-Z]\.?[,\s]|\d{4})',
+            r'^[A-ZÀ-ɏ][a-zA-ZÀ-ɏ\-\'’ ]+,\s+'
+            # Either a sequence of 1-3 initials (each: capital + optional
+            # period, optionally followed by whitespace) ending at a
+            # comma/space, OR a 4-digit year for organisational refs.
+            r'(?:(?:[A-Z]\.?\s*){1,3}[,\s]|\d{4})',
             head,
         ))
         if not starts_with_author:
