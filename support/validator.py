@@ -1898,12 +1898,20 @@ class ComplianceValidator:
                         element_refs.append((page, bbox, instance_msg))
 
             if out_of_order:
+                pairs_str = "; ".join(
+                    f"'{a}' should come after '{b}'" for a, b in out_of_order
+                )
+                count = len(out_of_order)
+                if count == 1:
+                    msg = "References not in alphabetical order"
+                else:
+                    msg = f"References not in alphabetical order ({count} issues)"
                 self.results.append(ValidationResult(
                     check_name="Reference Order",
                     passed=False,
                     severity=Severity.WARNING,
-                    message="References not in alphabetical order",
-                    details=f"'{out_of_order[0][0]}' should come after '{out_of_order[0][1]}'",
+                    message=msg,
+                    details=pairs_str,
                     element_refs=element_refs if element_refs else None
                 ))
         else:
