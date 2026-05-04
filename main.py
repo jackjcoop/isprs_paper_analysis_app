@@ -371,7 +371,7 @@ class PDFComplianceAnalyzer:
                     first_element.page,
                     first_element.bbox
                 )
-                found, actual_text, is_correct = self._search_for_label(
+                found, actual_text, is_correct, label_bbox = self._search_for_label(
                     pdf_path, "Keywords", first_element, "left"
                 )
                 if found:
@@ -380,6 +380,17 @@ class PDFComplianceAnalyzer:
                         labels_verified["Keywords_format_warning"] = (
                             f"Found '{actual_text}' - should be 'Keywords'"
                         )
+                    # Synthesize a Keywords_title element so downstream
+                    # checks (spacing, etc.) can see it as if Document AI
+                    # had tagged it.
+                    if label_bbox:
+                        synthetic = EnrichedElement(
+                            element_type="Keywords_title",
+                            text=actual_text,
+                            bbox=label_bbox,
+                            page=first_element.page,
+                        )
+                        enriched_elements.setdefault("Keywords_title", []).append(synthetic)
 
         # Check Abstract_title element
         abstract_title_elements = enriched_elements.get("Abstract_title", [])
@@ -404,7 +415,7 @@ class PDFComplianceAnalyzer:
                     first_element.page,
                     first_element.bbox
                 )
-                found, actual_text, is_correct = self._search_for_label(
+                found, actual_text, is_correct, label_bbox = self._search_for_label(
                     pdf_path, "Abstract", first_element, "above"
                 )
                 if found:
@@ -413,6 +424,18 @@ class PDFComplianceAnalyzer:
                         labels_verified["Abstract_format_warning"] = (
                             f"Found '{actual_text}' - should be 'Abstract'"
                         )
+                    # Synthesize an Abstract_title element so the section
+                    # spacing check can split Keywords→Abstract into the
+                    # correct sub-gaps (~22pt, label, ~11pt) instead of
+                    # treating the whole ~45pt span as one excessive gap.
+                    if label_bbox:
+                        synthetic = EnrichedElement(
+                            element_type="Abstract_title",
+                            text=actual_text,
+                            bbox=label_bbox,
+                            page=first_element.page,
+                        )
+                        enriched_elements.setdefault("Abstract_title", []).append(synthetic)
 
         return labels_verified
 
@@ -433,7 +456,9 @@ class PDFComplianceAnalyzer:
             direction: "left" or "above"
 
         Returns:
-            Tuple of (found, actual_text, is_correct_format)
+            Tuple of (found, actual_text, is_correct_format, label_bbox).
+            label_bbox is (x0, y0, x1, y1) of the spans containing the
+            matched label, or None when not found.
         """
         search_margin = 100  # points
 
@@ -444,7 +469,7 @@ class PDFComplianceAnalyzer:
         with PyMuPDFExtractor(pdf_path) as extractor:
             page_width, page_height = extractor.get_page_dimensions(page)
             if page_width == 0:
-                return (False, "", True)
+                return (False, "", True, None)
 
             # First check inside the content element's own bbox.
             # Document AI sometimes returns a bbox that already covers the
@@ -465,7 +490,14 @@ class PDFComplianceAnalyzer:
                 )
 
             label_lower = label_text.lower()
-            label_upper = label_text.upper()
+
+            def _bbox_for_term(spans, term: str):
+                """Bounding box of consecutive spans whose text contains term."""
+                term_lc = term.lower()
+                for s in spans:
+                    if term_lc in (s.text or '').lower():
+                        return tuple(s.bbox)
+                return None
 
             for search_bbox in regions_to_check:
                 spans = extractor.extract_text_from_bbox(page, search_bbox)
@@ -476,23 +508,23 @@ class PDFComplianceAnalyzer:
 
                 text_lower = text.lower()
 
-                # Check for correct format (e.g., "Keywords", "Abstract")
+                # Correct-format match (exact case)
                 if label_text in text or f"{label_text}:" in text:
-                    return (True, label_text, True)
+                    return (True, label_text, True, _bbox_for_term(spans, label_text))
 
                 # Any other case variation (e.g. "KEYWORDS", "ABSTRACT") is
                 # accepted — case is not constrained by ISPRS guidelines.
                 if label_lower in text_lower or f"{label_lower}:" in text_lower:
-                    return (True, label_text, True)
+                    return (True, label_text, True, _bbox_for_term(spans, label_text))
 
                 # Check for "key words" / "key-words" variations
                 if label_lower == "keywords":
                     for pattern in ["key word", "key words", "key-word",
                                     "key-words"]:
                         if pattern in text_lower:
-                            return (True, pattern, False)
+                            return (True, pattern, False, _bbox_for_term(spans, pattern))
 
-            return (False, "", True)
+            return (False, "", True, None)
 
     def _reclassify_headings(
         self,

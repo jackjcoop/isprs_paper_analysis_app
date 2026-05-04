@@ -2416,6 +2416,13 @@ class ComplianceValidator:
         MIN_ONE_BLANK = 6
         MAX_ONE_BLANK = 22   # ~2+ blank lines
         ONE_BLANK_LABEL = '1 blank line (~11pt)'
+        # Keywords -> Abstract body when no Abstract_title was detected:
+        # the actual gap covers 2 blank lines + the "Abstract" label line +
+        # 1 blank line ≈ 22 + 12 + 11 = ~45pt. Allow generous slack since
+        # the label is invisible to the parser.
+        MIN_FULL_KEY_TO_ABSTRACT = 30
+        MAX_FULL_KEY_TO_ABSTRACT = 60
+        FULL_KEY_TO_ABSTRACT_LABEL = '2 blank lines + Abstract label + 1 blank line (~45pt)'
 
         # Whether an Abstract_title element is present — controls fallback
         # expectations when Keywords is followed directly by Abstract body.
@@ -2445,9 +2452,12 @@ class ComplianceValidator:
             elif curr_type == 'Abstract_title' and next_type == 'Abstract':
                 min_gap, max_gap, expected_label = MIN_ONE_BLANK, MAX_ONE_BLANK, ONE_BLANK_LABEL
             elif curr_type == 'Keywords' and next_type == 'Abstract' and not has_abstract_title:
-                # No Abstract_title detected — fall back to checking the
-                # full Keywords -> Abstract body gap with a 2-blank-line rule.
-                min_gap, max_gap, expected_label = MIN_TWO_BLANK, MAX_TWO_BLANK, TWO_BLANK_LABEL
+                # No Abstract_title detected — the "Abstract" label still
+                # exists visually between Keywords and the abstract body,
+                # so the expected gap is 2 blank + label + 1 blank ≈ 45pt.
+                min_gap, max_gap, expected_label = (
+                    MIN_FULL_KEY_TO_ABSTRACT, MAX_FULL_KEY_TO_ABSTRACT, FULL_KEY_TO_ABSTRACT_LABEL
+                )
             else:
                 continue
 
