@@ -600,7 +600,7 @@ class ComplianceValidator:
                 check_name=f"{float_type} Citation Proximity",
                 passed=False,
                 severity=Severity.WARNING,
-                message=f"Found {len(out_of_proximity)} {float_type.lower()} citation(s) >1 page away",
+                message=f"Found {len(out_of_proximity)} {float_type.lower()} citation(s) >2 pages away",
                 details=f"Examples: {', '.join(examples)}"
             ))
         elif validation.get('citations', []):
@@ -608,7 +608,7 @@ class ComplianceValidator:
                 check_name=f"{float_type} Citation Proximity",
                 passed=True,
                 severity=Severity.SUCCESS,
-                message=f"All {float_type.lower()} citations within ±1 page",
+                message=f"All {float_type.lower()} citations within ±2 pages",
                 details=f"Validated {len(validation.get('citations', []))} citation(s)"
             ))
 

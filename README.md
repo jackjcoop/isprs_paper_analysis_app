@@ -106,7 +106,7 @@ The analyzer produces:
 ### Citations
 - Author-Year format validation
 - Citation-reference matching
-- Figure/Table citation coverage and proximity (±1 page)
+- Figure/Table citation coverage and proximity (±2 pages)
 
 ### Review Version
 - Anonymization check (named entity detection)
