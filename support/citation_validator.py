@@ -843,6 +843,25 @@ class CitationValidator:
         if re.search(r'[' + self._CAP + self._LET + r'],(?=\d{4}\b)', normalized_text):
             format_issues.append("Missing space after comma before year")
             normalized_text = re.sub(r'(,)(\d{4}\b)', r'\1 \2', normalized_text)
+        # "Surname YEAR" — no comma between author and year (e.g. "Comiso
+        # 1995"). Insert the comma so the simple-comma pattern recognises
+        # it; flag the missing comma so the format check surfaces the
+        # issue.
+        bare_surname_year_re = re.compile(
+            r'^\s*\(?\s*([' + self._CAP + r'][' + self._LET + r'\-\']+'
+            r'(?:\s+et\.?\s*al\.?|\s+(?:and|&)\s+[' + self._CAP + r'][' + self._LET + r'\-\']+)?)'
+            r'\s+(\d{4})\b'
+        )
+        bare_match = bare_surname_year_re.match(normalized_text)
+        if bare_match and ',' not in bare_match.group(0):
+            format_issues.append("Missing comma between author and year")
+            normalized_text = re.sub(
+                r'^(\s*\(?\s*[' + self._CAP + r'][' + self._LET + r'\-\']+'
+                r'(?:\s+et\.?\s*al\.?|\s+(?:and|&)\s+[' + self._CAP + r'][' + self._LET + r'\-\']+)?)'
+                r'\s+(\d{4})\b',
+                r'\1, \2',
+                normalized_text,
+            )
         # Malformed year: a 5+ digit number adjacent to a year-shaped prefix
         # (e.g. "20122" — typo for 2012). The year regex below would silently
         # take the leading "2012" and match a real reference; flag instead so
