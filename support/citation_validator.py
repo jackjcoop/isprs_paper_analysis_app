@@ -415,8 +415,11 @@ class CitationValidator:
     # Author-year reference pattern used to find the start of a real
     # reference inside an element that Document AI bundled with non-
     # reference content (figure captions, abstract paragraphs, etc.).
-    _REF_INITIAL = r'[A-Z]\.(?:\s*[A-Z]\.)*'
-    _REF_SURNAME = r"[A-Z][a-zA-Z\-']+"
+    # Surname class includes Unicode letters so accented names like
+    # "Janečka" or "Cedeño" don't truncate the match and cause the
+    # pattern to re-anchor on the next author.
+    _REF_INITIAL = r'[A-ZÀ-ÖØ-ÞĀ-ɏ]\.(?:\s*[A-ZÀ-ÖØ-ÞĀ-ɏ]\.)*'
+    _REF_SURNAME = r"[A-ZÀ-ÖØ-ÞĀ-ɏ][a-zA-ZÀ-öø-ÿĀ-ɏ\-']+"
     _REF_AUTHOR = _REF_SURNAME + r',\s+' + _REF_INITIAL
     _REF_START_PATTERN = re.compile(
         r'(?<![A-Za-z\-])'
@@ -440,6 +443,16 @@ class CitationValidator:
         """
         stripped = text.lstrip()
         if not stripped:
+            return text
+
+        # If the leading lowercase token is a known surname particle
+        # ("van Oosterom", "de la Fuente", "von Neumann"), the reference
+        # is real and starts with the particle — don't strip it.
+        _PARTICLE_LEADS = re.compile(
+            r'^(?:van der|van den|van|von|de la|de|del|della|der|den|du|da|dos|el|la|le|ten|ter)\s+[A-ZÀ-ɏ]',
+            re.IGNORECASE,
+        )
+        if _PARTICLE_LEADS.match(stripped):
             return text
 
         looks_non_reference = bool(
