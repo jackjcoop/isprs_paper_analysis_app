@@ -2499,6 +2499,15 @@ class ComplianceValidator:
             elem_text = getattr(elem, 'text', '') or ''
             if self._looks_like_bullet_list(elem_text):
                 continue
+            # Skip abbreviation/acronym lists — entries like "SSM/I: Special
+            # System Microwave Imager" each end mid-line, mirroring a bullet
+            # list. Detect when the paragraph has 3+ "ACRONYM:" patterns
+            # (allowing the leading "Abbreviations:" header).
+            acronym_colon_count = len(re.findall(
+                r'\b[A-Z][A-Z0-9/\-]{1,12}:\s', elem_text,
+            ))
+            if acronym_colon_count >= 3:
+                continue
 
             # Skip paragraphs that contain a displayed equation/math line.
             # When a centered formula (whether or not Document AI extracted
