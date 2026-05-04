@@ -1368,6 +1368,58 @@ class PDFComplianceAnalyzer:
 
             new_references = []
 
+            def _make_ref_from_gap(scan_page, gap_x0, gap_y0, gap_x1, gap_y1, label):
+                """Scan a gap region and append a Reference if it parses as one."""
+                page_w, page_h = page_dims.get(scan_page, (595, 842))
+                spans = extractor.extract_text_from_bbox(scan_page, (gap_x0, gap_y0, gap_x1, gap_y1))
+                if not spans:
+                    return
+                gap_text = ' '.join(s.text for s in spans).strip()
+                # Strip a leading "References" / "Bibliography" section
+                # heading if the gap straddles it.
+                gap_text = re.sub(
+                    r'^\s*(?:References|Bibliography)\s*[:\.]?\s*',
+                    '', gap_text, flags=re.IGNORECASE
+                ).strip()
+                if len(gap_text) < 20:
+                    return
+                if not ref_start_pattern.match(gap_text):
+                    return
+                if not re.search(r'\b(19\d{2}|20\d{2})\b', gap_text):
+                    return
+                norm_bbox = (gap_x0 / page_w, gap_y0 / page_h,
+                             gap_x1 / page_w, gap_y1 / page_h)
+                new_elem = extractor.enrich_element(
+                    'References', gap_text, norm_bbox, scan_page
+                )
+                new_references.append(new_elem)
+                print(f"  [Gap Detect] {label}: '{gap_text[:60]}...'")
+
+            # Pass 1: scan the region above the first reference of each
+            # (page, column) group. Document AI sometimes misses the very
+            # first reference after the "References" heading and there's no
+            # gap with a preceding ref to trigger Pass 2.
+            from collections import defaultdict
+            refs_by_group: Dict = defaultdict(list)
+            for ref in sorted_refs:
+                refs_by_group[(ref.page, get_column(ref))].append(ref)
+            TOP_MARGIN = 71  # ~25mm
+            for (scan_page, col), group_refs in refs_by_group.items():
+                first = min(group_refs, key=lambda r: r.bbox[1])
+                page_w, _ = page_dims.get(scan_page, (595, 842))
+                mid_x = page_w / 2
+                if col == 0:
+                    gx0 = left_margin
+                    gx1 = mid_x - col_gap_margin
+                else:
+                    gx0 = mid_x + col_gap_margin
+                    gx1 = page_w - left_margin
+                gy0 = TOP_MARGIN
+                gy1 = first.bbox[1]
+                if gy1 - gy0 < self.MIN_GAP_HEIGHT:
+                    continue
+                _make_ref_from_gap(scan_page, gx0, gy0, gx1, gy1, "Found pre-first reference")
+
             for i in range(len(sorted_refs) - 1):
                 ref_a = sorted_refs[i]
                 ref_b = sorted_refs[i + 1]
