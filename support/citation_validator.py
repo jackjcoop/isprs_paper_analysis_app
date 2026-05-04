@@ -1608,6 +1608,32 @@ class CitationValidator:
         # - _merge_partial_references() for Reference_Partial elements
         # - _merge_column_spanning_references() for References at column/page boundaries
         combined_refs = ref_elements
+        # Build a list of (page, bbox) for every figure/table caption element
+        # so we can spatially veto "References" that overlap a real caption —
+        # a strong signal that Document AI swept figure/table content into
+        # the References stream.
+        caption_regions: List[Tuple[int, Tuple[float, float, float, float]]] = []
+        for ck in ('Figure_Title', 'Figure_Number', 'Table_Title', 'Table_Number'):
+            for ce in extracted_elements.get(ck, []):
+                cp = getattr(ce, 'page', None)
+                cb = getattr(ce, 'bbox', None)
+                if cp is None or not cb:
+                    continue
+                caption_regions.append((cp, tuple(cb)))
+
+        def _overlaps_caption(r) -> bool:
+            rp = getattr(r, 'page', None)
+            rb = getattr(r, 'bbox', None)
+            if rp is None or not rb:
+                return False
+            for cp, cb in caption_regions:
+                if cp != rp:
+                    continue
+                # Bbox overlap test
+                if not (rb[2] < cb[0] or rb[0] > cb[2] or rb[3] < cb[1] or rb[1] > cb[3]):
+                    return True
+            return False
+
         # Filter out elements Document AI mis-classified as References — most
         # commonly figure captions, chart data blocks, panel labels, or body
         # prose (conclusion paragraphs, etc.) that got swept into the
@@ -1615,7 +1641,13 @@ class CitationValidator:
         # references and surface as "uncited".
         def _is_misclassified(r) -> bool:
             t = getattr(r, 'text', '') or ''
-            return self._looks_like_figure_content(t) or self._looks_like_prose_paragraph(t)
+            if self._looks_like_figure_content(t):
+                return True
+            if self._looks_like_prose_paragraph(t):
+                return True
+            if _overlaps_caption(r):
+                return True
+            return False
         combined_refs = [r for r in combined_refs if not _is_misclassified(r)]
         # Split references that Document AI merged into a single text block
         combined_refs = self._split_merged_references(combined_refs)
