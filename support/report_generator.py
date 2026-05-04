@@ -171,10 +171,11 @@ class ReportGenerator:
 
         # Now add combined annotations, tracking icon positions to avoid stacking
         color = WARNING_COLOR
-        # Track placed icon y-positions per page so we can offset collisions.
-        # Key: page index, Value: list of y-positions already used.
-        icon_positions_by_page: Dict[int, List[float]] = {}
-        ICON_HEIGHT = 20  # approximate height of a comment icon in points
+        # Track placed icon (x, y) positions per page to detect collisions.
+        icon_positions_by_page: Dict[int, List[Tuple[float, float]]] = {}
+        ICON_W = 20
+        ICON_H = 20
+        ICON_GAP = 2  # offset from bbox edge
 
         for bbox_key, annot_data in annotations_by_location.items():
             page = doc[annot_data['page_num']]
@@ -194,19 +195,44 @@ class ReportGenerator:
             # Combine details
             combined_details = "\n".join(annot_data['details']) if annot_data['details'] else ""
 
-            # Determine comment icon position, offsetting to avoid overlap
             page_idx = annot_data['page_num']
-            if page_idx not in icon_positions_by_page:
-                icon_positions_by_page[page_idx] = []
+            existing = icon_positions_by_page.setdefault(page_idx, [])
 
-            bbox = annot_data['bbox']
-            icon_y = bbox[1]  # default: top of bbox
+            # Pick an icon position attached to the bbox edge. Prefer the
+            # top-right corner, then fall back to other corners/edges before
+            # accepting an overlap. This keeps the comment near its bbox
+            # instead of drifting far down the page.
+            x0, y0, x1, y1 = annot_data['bbox']
+            mid_y = (y0 + y1) / 2 - ICON_H / 2
+            candidates = [
+                (x1 + ICON_GAP, y0),                      # top-right (preferred)
+                (x0 - ICON_W - ICON_GAP, y0),             # top-left
+                (x1 + ICON_GAP, y1 - ICON_H),             # bottom-right
+                (x0 - ICON_W - ICON_GAP, y1 - ICON_H),    # bottom-left
+                (x1 + ICON_GAP, mid_y),                   # mid-right
+                (x0 - ICON_W - ICON_GAP, mid_y),          # mid-left
+            ]
 
-            # Shift down until we find a slot that doesn't overlap an existing icon
-            for existing_y in sorted(icon_positions_by_page[page_idx]):
-                if abs(icon_y - existing_y) < ICON_HEIGHT:
-                    icon_y = existing_y + ICON_HEIGHT
-            icon_positions_by_page[page_idx].append(icon_y)
+            def _collides(pos: Tuple[float, float]) -> bool:
+                px, py = pos
+                return any(
+                    abs(px - ex) < ICON_W and abs(py - ey) < ICON_H
+                    for ex, ey in existing
+                )
+
+            chosen = next((c for c in candidates if not _collides(c)), None)
+            if chosen is None:
+                # All attachment points collide — pick the one with the
+                # largest min-distance from existing icons so the overlap
+                # is as small as possible.
+                def _min_dist(pos):
+                    return min(
+                        max(abs(pos[0] - ex), abs(pos[1] - ey))
+                        for ex, ey in existing
+                    )
+                chosen = max(candidates, key=_min_dist)
+
+            existing.append(chosen)
 
             self._add_annotation(
                 page=page,
@@ -215,7 +241,7 @@ class ReportGenerator:
                 check_name=combined_check_name,
                 message=combined_message,
                 details=combined_details,
-                icon_y_override=icon_y
+                icon_pos=chosen
             )
 
     def _add_annotation(
@@ -226,7 +252,7 @@ class ReportGenerator:
         check_name: str,
         message: str,
         details: str = "",
-        icon_y_override: Optional[float] = None
+        icon_pos: Optional[Tuple[float, float]] = None
     ):
         """
         Add a visible rectangle with clickable comment annotation.
@@ -238,8 +264,8 @@ class ReportGenerator:
             check_name: Name of the validation check
             message: Main error/warning message
             details: Additional details
-            icon_y_override: Optional y-position for the comment icon
-                             (used to avoid stacking icons on top of each other)
+            icon_pos: Optional (x, y) for the comment icon. Defaults to the
+                top-right corner of the bbox.
         """
         rect = fitz.Rect(bbox)
 
@@ -254,15 +280,25 @@ class ReportGenerator:
         if details:
             annotation_text += f"\n\nDetails: {details}"
 
-        # Position note icon at top-right corner, outside the box
-        icon_y = icon_y_override if icon_y_override is not None else rect.y0
-        comment_pos = fitz.Point(rect.x1 + 2, icon_y)
+        if icon_pos is not None:
+            comment_pos = fitz.Point(icon_pos[0], icon_pos[1])
+        else:
+            comment_pos = fitz.Point(rect.x1 + 2, rect.y0)
         annot = page.add_text_annot(
             comment_pos,
             annotation_text,
             icon="Comment"
         )
         annot.set_colors(stroke=color)
+
+        # Strip the date/author metadata that PDF readers display in the
+        # comment popup header — the user requested no dates on comments.
+        info = annot.info
+        info["creationDate"] = ""
+        info["modDate"] = ""
+        info["title"] = ""
+        annot.set_info(info)
+
         annot.update()
 
     def _generate_summary_pages(self) -> fitz.Document:
