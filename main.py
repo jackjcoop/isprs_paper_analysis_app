@@ -355,9 +355,10 @@ class PDFComplianceAnalyzer:
             labels_verified["Keywords"] = True
             labels_verified["Keywords_element_ref"] = (title_elem.page, title_elem.bbox)
 
-            # Format validation: should be "Keywords" (not "KEYWORDS", "key words", etc.)
+            # Format validation: flag wording variants like "key words"/"key-words".
+            # Case is not constrained by ISPRS guidelines, so "KEYWORDS" is accepted.
             title_text = title_elem.text.strip().rstrip(':')
-            if title_text != "Keywords":
+            if title_text.lower() not in ("keywords", "keyword"):
                 labels_verified["Keywords_format_warning"] = (
                     f"Found '{title_text}' - should be 'Keywords'"
                 )
@@ -387,9 +388,10 @@ class PDFComplianceAnalyzer:
             labels_verified["Abstract"] = True
             labels_verified["Abstract_element_ref"] = (title_elem.page, title_elem.bbox)
 
-            # Format validation: should be "Abstract" (not "ABSTRACT", etc.)
+            # Case is not constrained by ISPRS guidelines, so "ABSTRACT" is
+            # accepted. Only flag if the wording differs (e.g. "Summary").
             title_text = title_elem.text.strip().rstrip(':')
-            if title_text != "Abstract":
+            if title_text.lower() != "abstract":
                 labels_verified["Abstract_format_warning"] = (
                     f"Found '{title_text}' - should be 'Abstract'"
                 )
@@ -478,13 +480,10 @@ class PDFComplianceAnalyzer:
                 if label_text in text or f"{label_text}:" in text:
                     return (True, label_text, True)
 
-                # Check for ALL CAPS (e.g., "KEYWORDS", "ABSTRACT")
-                if label_upper in text or f"{label_upper}:" in text:
-                    return (True, label_upper, False)
-
-                # Check for any case variation
+                # Any other case variation (e.g. "KEYWORDS", "ABSTRACT") is
+                # accepted — case is not constrained by ISPRS guidelines.
                 if label_lower in text_lower or f"{label_lower}:" in text_lower:
-                    return (True, text_lower, False)
+                    return (True, label_text, True)
 
                 # Check for "key words" / "key-words" variations
                 if label_lower == "keywords":
