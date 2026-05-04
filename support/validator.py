@@ -390,12 +390,20 @@ class ComplianceValidator:
                 # Build element_refs from parsed citations for PDF annotation
                 element_refs = []
                 citations_parsed = citation_results.get('citations_parsed', [])
-                orphan_texts = set(c['text'] for c in clean_orphans)
+                reason_by_text = {c['text']: c.get('reason', '') for c in clean_orphans}
 
                 for parsed_cit in citations_parsed:
-                    if parsed_cit.text in orphan_texts:
+                    if parsed_cit.text not in reason_by_text:
+                        continue
+                    if reason_by_text[parsed_cit.text] == "Could not parse author from citation":
+                        instance_msg = (
+                            f"Citation '{parsed_cit.text}' could not be parsed — possible "
+                            f"formatting issue (e.g. missing space between 'al.' or comma and "
+                            f"year). Verify against bibliography manually."
+                        )
+                    else:
                         instance_msg = f"Citation '{parsed_cit.text}' has no matching reference in bibliography"
-                        element_refs.append((parsed_cit.page, parsed_cit.bbox, instance_msg))
+                    element_refs.append((parsed_cit.page, parsed_cit.bbox, instance_msg))
 
                 orphan_list = '; '.join(c['text'] for c in clean_orphans)
                 self.results.append(ValidationResult(
