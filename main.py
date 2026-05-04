@@ -1209,6 +1209,25 @@ class PDFComplianceAnalyzer:
         cleaned_for_year = re.sub(r'doi[:\s]\S+', '', cleaned_for_year, flags=re.IGNORECASE)
         has_early_year = bool(re.search(r'\b(19\d{2}|20\d{2})[a-z]?\b', cleaned_for_year))
 
+        # Journal-name continuation: a fragment like
+        #   "Soil and Tillage Research, Volume 244, 2024, 106179, ISSN 0167-1987,
+        #    https://doi.org/10.1016/..."
+        # has a Title-Case start AND a year, so the basic check above would
+        # treat it as a new reference. Detect the journal-metadata signature
+        # (Volume/Vol./ISSN/pp./doi.org) without an author-initial pattern
+        # ("Surname, I.") in the first ~80 chars and treat it as a fragment.
+        has_author_initial = bool(re.search(
+            r'^[A-ZÀ-ɏ][a-zA-ZÀ-ɏ\-\'’]+,\s+[A-Z]\.',
+            text,
+        ))
+        has_journal_metadata = bool(re.search(
+            r'\b(?:Volume\b|Vol\.|ISSN\b|pp\.|doi\.org)',
+            early_text,
+            re.IGNORECASE,
+        ))
+        if has_journal_metadata and not has_author_initial:
+            return True
+
         # It's a new reference only if it has BOTH a surname start AND an early year
         return not (ref_start and has_early_year)
 

@@ -2171,6 +2171,26 @@ class ComplianceValidator:
         surnames_only = [r['surname'] for r in ref_data]
         is_sorted = surnames_only == sorted(surnames_only)
 
+        # Drop split-out fragments that share a bbox with an earlier ref.
+        # Document AI sometimes merges two bibliography entries into one
+        # element; the splitter produces multiple ParsedReferences pointing
+        # at the same source bbox. Those duplicates have no independent
+        # visual position and shouldn't drive order flags. Keep the first
+        # occurrence of each bbox (the "real" ref at that location).
+        seen_bboxes: set = set()
+        deduped_ref_data = []
+        for r in ref_data:
+            er = r.get('element_ref')
+            if er:
+                key = (er[0], tuple(er[1]) if er[1] is not None else None)
+                if key in seen_bboxes:
+                    continue
+                seen_bboxes.add(key)
+            deduped_ref_data.append(r)
+        ref_data = deduped_ref_data
+        surnames_only = [r['surname'] for r in ref_data]
+        is_sorted = surnames_only == sorted(surnames_only)
+
         if not is_sorted:
             # Find out-of-order references and collect their element_refs with per-instance messages
             element_refs = []
