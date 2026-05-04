@@ -2270,12 +2270,20 @@ class ComplianceValidator:
 
         justify_tolerance = 15  # ±15pt for both edges
 
+        # Single-line references can't be "justified" — a short line of text
+        # naturally ends mid-column. Justification only matters for refs that
+        # wrap to ≥2 lines, where interior lines should reach the right edge.
+        # Use bbox height as a proxy: at 9pt × ~1.2 leading, one line ≈ 10–12pt.
+        SINGLE_LINE_HEIGHT = 15
+
         alignment_issues = []
         for ref in references:
             if not ref.bbox:
                 continue
 
-            x0, _, x1, _ = ref.bbox
+            x0, y0, x1, y1 = ref.bbox
+            if (y1 - y0) < SINGLE_LINE_HEIGHT:
+                continue
             x_center = (x0 + x1) / 2
 
             if x_center < mid_page:
