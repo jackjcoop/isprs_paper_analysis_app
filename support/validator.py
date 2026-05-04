@@ -385,10 +385,11 @@ class ComplianceValidator:
         # Detect numeric/IEEE-style citations (e.g. "[1]", "Smith et al. [12]") —
         # these are a citation-format issue, not missing-reference issue.
         numeric_style_texts = self._check_numeric_style_citations(citation_results)
-        # Spacing/punctuation defects ("et al.2021", "Smith,2020") — flagged
-        # separately so the matching can still succeed with the lenient parse.
-        self._check_citation_spacing_format(citation_results)
-        excluded_orphan_texts = malformed_texts | numeric_style_texts
+        # Spacing/punctuation defects ("et al.2021", "Smith,2020") and typos
+        # ("at el." for "et al.") — flagged separately so they don't double-
+        # count as orphan citations in the report.
+        format_flagged_texts = self._check_citation_spacing_format(citation_results)
+        excluded_orphan_texts = malformed_texts | numeric_style_texts | format_flagged_texts
 
         # Check for orphan citations — exclude malformed/numeric-style ones
         # (they get their own check)
@@ -538,10 +539,16 @@ class ComplianceValidator:
 
         return malformed_texts
 
-    def _check_citation_spacing_format(self, citation_results: Dict) -> None:
+    def _check_citation_spacing_format(self, citation_results: Dict) -> set:
         """Surface citation format defects recorded by the lenient parser.
         Splits typo-class issues (e.g. "at el." for "et al.") from spacing/
         punctuation issues so each gets its own dedicated check.
+
+        Returns:
+            Set of citation texts that had any format issue, so the caller
+            can exclude them from the Orphaned Citations list — formatting
+            problems get their own dedicated check and shouldn't double-
+            count as missing-reference issues.
         """
         citations_parsed = citation_results.get('citations_parsed', [])
 
@@ -551,6 +558,7 @@ class ComplianceValidator:
         spacing_details = []
         seen_typo: set = set()
         seen_spacing: set = set()
+        flagged_texts: set = set()
 
         for cit in citations_parsed:
             if cit.citation_type != 'reference':
@@ -558,6 +566,7 @@ class ComplianceValidator:
             issues = getattr(cit, 'format_issues', None) or []
             if not issues:
                 continue
+            flagged_texts.add(cit.text)
             label = f"'{cit.text[:50]}{'...' if len(cit.text) > 50 else ''}'"
 
             typo_issues = [i for i in issues if i.lower().startswith('typo')]
@@ -610,6 +619,8 @@ class ComplianceValidator:
                 details=f"Affected: {'; '.join(shown)}{suffix}",
                 element_refs=spacing_refs if spacing_refs else None,
             ))
+
+        return flagged_texts
 
     def _check_numeric_style_citations(self, citation_results: Dict) -> set:
         """Detect numeric/IEEE-style in-text citations (e.g. "[1]", "[2, 3]",
