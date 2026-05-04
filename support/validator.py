@@ -812,6 +812,13 @@ class ComplianceValidator:
         """
         import re as _re
 
+        # Match the full identifier ("A.1", "1.2") not just the first digit
+        # run, so appendix figures don't collide with main-text figures.
+        float_num_re = _re.compile(
+            r'(?:Figure|Fig\.?|Table|Tab\.?)\s*'
+            r'(?P<num>(?:[A-Z]\.)?\d+(?:\.\d+)?)',
+            _re.IGNORECASE,
+        )
         for float_type, key in [('Figure', 'Figure_Number'), ('Table', 'Table_Number')]:
             elements = extracted_elements.get(key, [])
             if not elements:
@@ -820,10 +827,10 @@ class ComplianceValidator:
             # Group elements by their extracted number
             by_number: Dict[str, list] = {}
             for elem in elements:
-                match = _re.search(r'\d+', elem.text)
+                match = float_num_re.search(elem.text)
                 if not match:
                     continue
-                num = match.group(0)
+                num = match.group('num')
                 by_number.setdefault(num, []).append(elem)
 
             # Deduplicate within each group (same page + overlapping bbox)
@@ -836,7 +843,12 @@ class ComplianceValidator:
             if duplicates:
                 element_refs = []
                 dup_labels = []
-                for num, elems in sorted(duplicates.items(), key=lambda x: int(x[0])):
+                # Sort numerically when possible; fall back to string sort
+                # for appendix-style identifiers like "A.1".
+                def _sort_key(item):
+                    n = item[0]
+                    return (0, int(n)) if n.isdigit() else (1, n)
+                for num, elems in sorted(duplicates.items(), key=_sort_key):
                     dup_labels.append(f"{float_type} {num} (x{len(elems)})")
                     for elem in elems:
                         bbox = elem.bbox

@@ -1939,15 +1939,23 @@ class CitationValidator:
 
         # Extract float numbers and pages
         floats_by_number = {}
+        # Match the full identifier including appendix prefixes ("A.1") and
+        # sub-numbers ("1.2"), not just the first digit run. Without this
+        # "Figure A.1" would collapse to "1" and collide with "Figure 1".
+        float_num_re = re.compile(
+            r'(?:Figure|Fig\.?|Table|Tab\.?)\s*'
+            r'(?P<num>(?:[A-Z]\.)?\d+(?:\.\d+)?)',
+            re.IGNORECASE,
+        )
         for elem in float_numbers:
             # Convert BoundingBox object to tuple if needed
             elem_bbox = elem.bbox
             if hasattr(elem_bbox, 'x0'):
                 elem_bbox = (elem_bbox.x0, elem_bbox.y0, elem_bbox.x1, elem_bbox.y1)
             # Extract number from text
-            match = re.search(r'\d+', elem.text)
+            match = float_num_re.search(elem.text)
             if match:
-                num = match.group(0)
+                num = match.group('num')
                 floats_by_number[num] = {
                     'number': num,
                     'page': elem.page,
@@ -2037,11 +2045,14 @@ class CitationValidator:
             })
 
         # Parse citations — extract ALL numbers from compound references
-        # e.g. "Tables 2 and 3" or "Figures 1, 2, and 3" should cite every number
+        # e.g. "Tables 2 and 3" or "Figures 1, 2, and 3" should cite every
+        # number. Recognise appendix forms ("Fig. A.1") and sub-numbers
+        # ("Fig. 1.2") as distinct identifiers.
+        cit_num_re = re.compile(r'(?:[A-Z]\.)?\d+(?:\.\d+)?')
         cited_numbers = set()
         for cit_elem in float_citations:
-            # Extract all numbers from citation text
-            all_nums = re.findall(r'\d+', cit_elem.text)
+            # Extract all numbers from citation text (incl. appendix-prefixed)
+            all_nums = cit_num_re.findall(cit_elem.text)
             if not all_nums:
                 continue
 
