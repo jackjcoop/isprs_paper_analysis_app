@@ -2043,38 +2043,34 @@ class ComplianceValidator:
         right_col_right = page_width - right_margin
 
         right_edge_tolerance = 8   # ±8pt for an interior line to count as reaching the right edge
-        # Group spans into a line by baseline-center proximity. Tolerance must
-        # accommodate superscripts and inline equations that shift y0 by 2-4pt
-        # at 9pt body text — too tight a tolerance splits a single visual line
-        # into two and produces false-positive justification warnings.
-        y_tolerance = 3.5  # pt
-
-        def _baseline_center(s):
-            return (s.bbox[1] + s.bbox[3]) / 2
+        # Group spans into a line by vertical-bbox overlap with the running
+        # line bbox. Subscripts/superscripts and inline equations have shifted
+        # baselines but their bboxes still sit inside the host line's vertical
+        # extent — a baseline-center check would split them off as bogus
+        # "lines" and produce false-positive justification warnings.
+        overlap_ratio_threshold = 0.5
 
         def _group_lines(spans):
-            sorted_spans = sorted(spans, key=lambda s: (_baseline_center(s), s.bbox[0]))
+            sorted_spans = sorted(spans, key=lambda s: (s.bbox[1], s.bbox[0]))
             lines = []
-            current = [sorted_spans[0]]
-            current_center = _baseline_center(sorted_spans[0])
+            current_bbox = list(sorted_spans[0].bbox)
             for s in sorted_spans[1:]:
-                center = _baseline_center(s)
-                if abs(center - current_center) <= y_tolerance:
-                    current.append(s)
+                sb = s.bbox
+                span_h = sb[3] - sb[1]
+                overlap = max(0.0, min(sb[3], current_bbox[3]) - max(sb[1], current_bbox[1]))
+                merges = span_h > 0 and overlap >= overlap_ratio_threshold * span_h
+                if merges:
+                    current_bbox = [
+                        min(current_bbox[0], sb[0]),
+                        min(current_bbox[1], sb[1]),
+                        max(current_bbox[2], sb[2]),
+                        max(current_bbox[3], sb[3]),
+                    ]
                 else:
-                    lines.append(current)
-                    current = [s]
-                    current_center = center
-            lines.append(current)
-            return [
-                (
-                    min(s.bbox[0] for s in line),
-                    min(s.bbox[1] for s in line),
-                    max(s.bbox[2] for s in line),
-                    max(s.bbox[3] for s in line),
-                )
-                for line in lines
-            ]
+                    lines.append(tuple(current_bbox))
+                    current_bbox = list(sb)
+            lines.append(tuple(current_bbox))
+            return lines
 
         flagged = []
         element_refs = []
