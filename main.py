@@ -150,6 +150,10 @@ class PDFComplianceAnalyzer:
         with ProgressIndicator("Scanning for missed references in gaps"):
             enriched_elements = self._detect_references_in_gaps(enriched_elements, pdf_path)
 
+        # Step 3.95: Recover Title from PDF when Document AI missed it
+        with ProgressIndicator("Recovering missing Title element"):
+            enriched_elements = self._recover_title_from_authors(enriched_elements, pdf_path)
+
         # Step 4: Verify special labels (Keywords, Abstract)
         with ProgressIndicator("Verifying special labels"):
             labels_verified = self._verify_labels(enriched_elements, pdf_path)
@@ -438,6 +442,70 @@ class PDFComplianceAnalyzer:
                         enriched_elements.setdefault("Abstract_title", []).append(synthetic)
 
         return labels_verified
+
+    def _recover_title_from_authors(
+        self,
+        enriched_elements: Dict[str, List[EnrichedElement]],
+        pdf_path: str
+    ) -> Dict[str, List[EnrichedElement]]:
+        """If Document AI didn't tag a Title element but tagged Authors,
+        scan the area above the topmost Author for the title text and
+        synthesize a Title element from the largest-font line(s).
+
+        Title typography in ISPRS papers is the largest text on the
+        first page, so we anchor on font size: take the spans above
+        Authors that share the maximum font size found in that region
+        (allowing 0.5pt slack for fractional font sizes).
+        """
+        if enriched_elements.get("Title"):
+            return enriched_elements
+        authors = enriched_elements.get("Authors", [])
+        if not authors:
+            return enriched_elements
+
+        # Topmost author across pages
+        topmost = min(authors, key=lambda a: (a.page, a.bbox[1]))
+
+        with PyMuPDFExtractor(pdf_path) as extractor:
+            page_width, page_height = extractor.get_page_dimensions(topmost.page)
+            if page_width == 0:
+                return enriched_elements
+            search_bbox = (0.0, 0.0, page_width, topmost.bbox[1])
+            spans = extractor.extract_text_from_bbox(topmost.page, search_bbox)
+
+        spans = [s for s in spans if (s.text or '').strip() and s.font_size]
+        if not spans:
+            return enriched_elements
+
+        max_size = max(s.font_size for s in spans)
+        title_spans = [s for s in spans if s.font_size >= max_size - 0.5]
+        if not title_spans:
+            return enriched_elements
+
+        title_spans.sort(key=lambda s: (s.bbox[1], s.bbox[0]))
+        title_text = ' '.join(s.text.strip() for s in title_spans).strip()
+        if not title_text:
+            return enriched_elements
+
+        x0 = min(s.bbox[0] for s in title_spans)
+        y0 = min(s.bbox[1] for s in title_spans)
+        x1 = max(s.bbox[2] for s in title_spans)
+        y1 = max(s.bbox[3] for s in title_spans)
+
+        first_span = title_spans[0]
+        synthetic = EnrichedElement(
+            element_type="Title",
+            text=title_text,
+            bbox=(x0, y0, x1, y1),
+            page=topmost.page,
+            font_size=max_size,
+            font_name=first_span.font_name,
+            is_bold=first_span.is_bold,
+            is_italic=first_span.is_italic,
+            spans=list(title_spans),
+        )
+        enriched_elements.setdefault("Title", []).append(synthetic)
+        return enriched_elements
 
     def _search_for_label(
         self,
