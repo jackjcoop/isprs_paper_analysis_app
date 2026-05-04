@@ -997,6 +997,11 @@ class CitationValidator:
 
             # Normalize text: fix line-break hyphens so "Shah- mohamadi" -> "Shahmohamadi"
             text = self._fix_line_break_hyphens(element.text)
+            # Collapse runs of whitespace (incl. newlines) to single spaces.
+            # Table cells often split a citation across lines, e.g.
+            # "Cheng et al.\n, 2022)" — the citation_year_pattern below expects
+            # commas adjacent to the year, so we flatten first.
+            text = re.sub(r'\s+', ' ', text)
 
             # Look for author name with word boundaries
             for author_match in author_pattern.finditer(text):
@@ -1457,17 +1462,23 @@ class CitationValidator:
             if match.matched and match.reference:
                 cited_ref_texts.add(match.reference.original_text)
 
-        # Check main text as fallback for uncited references
-        main_text_elements = extracted_elements.get('Main_Text', [])
+        # Check main text as fallback for uncited references. Also scan
+        # Table content — comparison/literature tables often cite references
+        # inline (e.g. "(Chen et al., 2018)") and those don't appear in
+        # In_Text_Citations_References extraction.
+        fallback_elements = (
+            extracted_elements.get('Main_Text', [])
+            + extracted_elements.get('Table', [])
+        )
 
         for parsed_ref in results['references_parsed']:
             if parsed_ref.original_text not in cited_ref_texts:
-                # Fallback: search in main text
+                # Fallback: search in main text and tables
                 found_in_main_text = False
-                if main_text_elements:
+                if fallback_elements:
                     found_in_main_text = self.search_main_text_for_citation(
                         parsed_ref,
-                        main_text_elements
+                        fallback_elements
                     )
 
                 if not found_in_main_text:
