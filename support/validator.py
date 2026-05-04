@@ -2315,7 +2315,10 @@ class ComplianceValidator:
         """
         # Sort all relevant elements by page and y-position
         section_elements = []
-        section_types = ['Title', 'Authors', 'Affiliations', 'Keywords', 'Abstract', 'Headings']
+        section_types = [
+            'Title', 'Authors', 'Affiliations',
+            'Keywords', 'Abstract_title', 'Abstract', 'Headings'
+        ]
 
         for elem_type in section_types:
             for elem in extracted_elements.get(elem_type, []):
@@ -2337,7 +2340,14 @@ class ComplianceValidator:
         # above MAX are too many.
         MIN_TWO_BLANK = 18
         MAX_TWO_BLANK = 35   # ~3+ blank lines
-        EXPECTED_LABEL = '2 blank lines (~22pt)'
+        TWO_BLANK_LABEL = '2 blank lines (~22pt)'
+        MIN_ONE_BLANK = 6
+        MAX_ONE_BLANK = 22   # ~2+ blank lines
+        ONE_BLANK_LABEL = '1 blank line (~11pt)'
+
+        # Whether an Abstract_title element is present — controls fallback
+        # expectations when Keywords is followed directly by Abstract body.
+        has_abstract_title = bool(extracted_elements.get('Abstract_title'))
 
         # Check gaps between consecutive section types on same page
         for i in range(len(section_elements) - 1):
@@ -2349,19 +2359,30 @@ class ComplianceValidator:
 
             gap = next_elem.bbox[1] - curr_elem.bbox[3]  # y0_next - y1_curr
 
-            # Only Authors/Affiliations → Keywords and Keywords → Abstract
-            # have an explicit ISPRS spacing rule (2 blank lines).
-            applies = (
-                (curr_type in ('Authors', 'Affiliations') and next_type == 'Keywords')
-                or (curr_type == 'Keywords' and next_type == 'Abstract')
-            )
-            if not applies:
+            # ISPRS rules:
+            #   Authors/Affiliations -> Keywords:        2 blank lines
+            #   Keywords -> Abstract_title:              2 blank lines
+            #   Abstract_title -> Abstract (body):       1 blank line
+            #   Keywords -> Abstract (no title found):   2 blank lines + label
+            #                                            line + 1 blank line
+            min_gap = max_gap = expected_label = None
+            if curr_type in ('Authors', 'Affiliations') and next_type == 'Keywords':
+                min_gap, max_gap, expected_label = MIN_TWO_BLANK, MAX_TWO_BLANK, TWO_BLANK_LABEL
+            elif curr_type == 'Keywords' and next_type == 'Abstract_title':
+                min_gap, max_gap, expected_label = MIN_TWO_BLANK, MAX_TWO_BLANK, TWO_BLANK_LABEL
+            elif curr_type == 'Abstract_title' and next_type == 'Abstract':
+                min_gap, max_gap, expected_label = MIN_ONE_BLANK, MAX_ONE_BLANK, ONE_BLANK_LABEL
+            elif curr_type == 'Keywords' and next_type == 'Abstract' and not has_abstract_title:
+                # No Abstract_title detected — fall back to checking the
+                # full Keywords -> Abstract body gap with a 2-blank-line rule.
+                min_gap, max_gap, expected_label = MIN_TWO_BLANK, MAX_TWO_BLANK, TWO_BLANK_LABEL
+            else:
                 continue
 
             kind = None
-            if gap < MIN_TWO_BLANK:
+            if gap < min_gap:
                 kind = 'insufficient'
-            elif gap > MAX_TWO_BLANK:
+            elif gap > max_gap:
                 kind = 'excessive'
 
             if kind:
@@ -2370,7 +2391,7 @@ class ComplianceValidator:
                     'to': next_type,
                     'gap': gap,
                     'kind': kind,
-                    'expected': EXPECTED_LABEL,
+                    'expected': expected_label,
                 })
 
                 # Build a bbox covering the gap region between the two elements
@@ -2388,7 +2409,7 @@ class ComplianceValidator:
                 gap_bbox = (x0, y0, x1, y1)
                 instance_msg = (
                     f"Spacing: {curr_type} -> {next_type}: "
-                    f"{gap:.0f}pt gap ({kind}), expected {EXPECTED_LABEL}"
+                    f"{gap:.0f}pt gap ({kind}), expected {expected_label}"
                 )
                 element_refs.append((curr_elem.page, gap_bbox, instance_msg))
 
