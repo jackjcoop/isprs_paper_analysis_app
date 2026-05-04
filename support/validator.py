@@ -1736,11 +1736,41 @@ class ComplianceValidator:
         ]
 
         mid_page = page_width / 2
+        col_margin = page_width * 0.05  # ~5% slack around the column gutter
+
+        # For Figure_Number / Table_Number, the union of the number bbox and
+        # its caption-title bbox tells us whether the float is full-width
+        # (spans both columns). Full-width floats sit outside the column
+        # reading flow and shouldn't trigger out-of-order warnings against
+        # single-column floats on the same page.
+        title_key_map = {
+            'Figure_Number': 'Figure_Title',
+            'Table_Number': 'Table_Title',
+        }
+
+        def _is_full_width(elem, titles):
+            if not (hasattr(elem, 'bbox') and elem.bbox):
+                return False
+            x0, _y0, x1, y1 = elem.bbox
+            union_x0, union_x1 = x0, x1
+            for t in titles:
+                if getattr(t, 'page', None) != getattr(elem, 'page', None):
+                    continue
+                if not (hasattr(t, 'bbox') and t.bbox):
+                    continue
+                ty0, ty1 = t.bbox[1], t.bbox[3]
+                # Same caption row: title overlaps or sits just below the number
+                if ty0 <= y1 + 15 and ty1 >= elem.bbox[1] - 15:
+                    union_x0 = min(union_x0, t.bbox[0])
+                    union_x1 = max(union_x1, t.bbox[2])
+            return union_x0 < (mid_page - col_margin) and union_x1 > (mid_page + col_margin)
 
         for config in element_configs:
             elements = extracted_elements.get(config['type'], [])
             if len(elements) < 2:
                 continue
+
+            title_elements = extracted_elements.get(title_key_map.get(config['type'], ''), [])
 
             # Sort by reading order: (page, column, y_position)
             def reading_order(elem, mid=mid_page):
@@ -1771,7 +1801,8 @@ class ComplianceValidator:
                     numbered_elements.append({
                         'num': num,
                         'elem': elem,
-                        'text': text[:40]
+                        'text': text[:40],
+                        'is_full_width': _is_full_width(elem, title_elements) if title_elements else False,
                     })
 
             # Check for out-of-order elements
@@ -1785,6 +1816,14 @@ class ComplianceValidator:
                     is_out_of_order = curr['num'] > next_item['num']
                 else:
                     is_out_of_order = curr['num'] > next_item['num']
+
+                # Skip same-page pairs involving a full-width float — column-based
+                # reading order is unreliable when one element spans both columns.
+                if is_out_of_order and (curr.get('is_full_width') or next_item.get('is_full_width')):
+                    curr_page = getattr(curr['elem'], 'page', None)
+                    next_page = getattr(next_item['elem'], 'page', None)
+                    if curr_page == next_page:
+                        is_out_of_order = False
 
                 if is_out_of_order:
                     elem_ref = None
