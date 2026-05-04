@@ -271,6 +271,57 @@ class CitationValidator:
         return ''.join(c for c in nfkd if not unicodedata.combining(c)).lower()
 
     @staticmethod
+    def _looks_like_figure_content(text: str) -> bool:
+        """True if a "References" element is actually misclassified figure
+        content (caption, panel labels, chart data). Document AI sometimes
+        sweeps these into the References stream; treating them as real refs
+        produces phantom "uncited" entries.
+
+        Signals:
+        - Starts with a figure/panel marker: "Figure N.", "(a) Figure", "(d) ...".
+        - "Figure N." appears very early in the text (within ~80 chars).
+        - The leading text has a high density of standalone numbers and
+          square-bracketed units like "[s]" / "[m]" — typical of axis labels.
+        """
+        if not text:
+            return False
+        head = text.strip()
+        # Panel marker like "(a) Figure 5." or "(d) ..."
+        if re.match(r'^\([a-z]\)\s+Figure\s*\d', head, re.IGNORECASE):
+            return True
+        # "Figure N." right at the start
+        if re.match(r'^Figure\s+\d+\.', head, re.IGNORECASE):
+            return True
+        # "Figure N." appearing in the first ~200 chars indicates figure
+        # content rather than a reference whose title happens to mention
+        # a figure (real refs lead with author surnames first).
+        early = head[:200]
+        if re.search(r'\bFigure\s+\d+\.', early, re.IGNORECASE):
+            return True
+        # Chart-data signature: bracketed units in the leading text
+        # (e.g. "[s]", "[m]", "[%]") suggest axis labels, not a reference.
+        snippet = head[:300]
+        bracket_units = len(re.findall(r'\[[a-zA-Z%]{1,3}\]', snippet))
+        if bracket_units >= 2:
+            return True
+        # Chart-axis signature: many standalone numeric tokens in the
+        # leading text (axis tick values like "200 400 600 800"). Real
+        # references rarely carry 5+ bare numbers within the first 150
+        # chars; skip the check entirely if the text already opens with a
+        # plausible author-list pattern ("Surname, I." or
+        # "Organisation Name, YEAR") so titles that legitimately contain
+        # numerals don't false-match.
+        starts_with_author = bool(re.match(
+            r'^[A-ZÀ-ɏ][a-zA-ZÀ-ɏ\-\'’ ]+,\s+(?:[A-Z]\.|[A-Z][a-z]+,\s+\d{4})',
+            head,
+        ))
+        if not starts_with_author:
+            standalone_digit_groups = len(re.findall(r'(?<!\w)\d+(?!\w)', head[:150]))
+            if standalone_digit_groups >= 5:
+                return True
+        return False
+
+    @staticmethod
     def _normalize_citation_key(text: str) -> str:
         """Build a comparison key for citation dedup. Collapses whitespace,
         strips outer punctuation, lowercases, and squashes spacing defects
@@ -1497,6 +1548,12 @@ class CitationValidator:
         # - _merge_partial_references() for Reference_Partial elements
         # - _merge_column_spanning_references() for References at column/page boundaries
         combined_refs = ref_elements
+        # Filter out elements Document AI mis-classified as References — most
+        # commonly figure captions, chart data blocks, or panel labels that
+        # got swept into the References stream. These would otherwise be
+        # parsed as bogus references and surface as "uncited".
+        combined_refs = [r for r in combined_refs
+                         if not self._looks_like_figure_content(getattr(r, 'text', '') or '')]
         # Split references that Document AI merged into a single text block
         combined_refs = self._split_merged_references(combined_refs)
 
