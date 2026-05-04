@@ -177,6 +177,24 @@ class CitationValidator:
         r'(?:[a-z])?'                               # Optional year suffix
     )
 
+    # 5b. APA-style multi-author surname-only citation:
+    # "Smith, Jones, & Brown, 2020" / "Smith, Jones, and Brown, 2020".
+    # The first surname is the primary author. Anchored at start (after
+    # optional opening paren) so the first capture wins.
+    APA_MULTI_AUTHOR_PATTERN = re.compile(
+        r'^\s*\(?\s*'
+        r'(?P<author>'
+        r'(?:\b(?:van der|van den|van|von|de la|de|del|della|der|den|du|da|dos|el|la|le|ten|ter)\s+)?'
+        r'[' + _CAP + r'][' + _LET + r'\-]+'                           # First author surname
+        r')'
+        r',\s+'                                                         # ", "
+        r'(?:[' + _CAP + r'][' + _LET + r'\-]+,\s+){1,8}'              # 1-8 more comma-separated surnames
+        r'(?:and|&)\s+'                                                 # final "and"/"&"
+        r'[' + _CAP + r'][' + _LET + r'\-]+,\s*'                       # last surname before year
+        r'(?P<year>19\d{2}|20\d{2})'
+        r'(?:[a-z])?'
+    )
+
     # Lenient scanner used to find parenthetical citations Document AI may
     # have missed inside Main_Text. Tolerates "et al.YEAR" with no comma/
     # space, "Smith,YEAR" with no space, etc. Requires either an et-al/&-
@@ -873,8 +891,17 @@ class CitationValidator:
                 f"(expected 4 digits)"
             )
 
+        # APA-style multi-author surname-only citation runs FIRST so it
+        # wins over later patterns that would greedily pick the LAST
+        # comma-separated surname (e.g. "Suresh, Rao, & Mehta, 2022" →
+        # SIMPLE_COMMA_PATTERN otherwise matches "Mehta, 2022").
+        apa_match = self.APA_MULTI_AUTHOR_PATTERN.match(normalized_text)
+        if apa_match:
+            primary_surname = apa_match.group('author').strip()
+            year = apa_match.group('year')
+
         # Try NER first (handles all variable formats like "Smith described in 2020")
-        if SPACY_AVAILABLE and _nlp:
+        if (not primary_surname or not year) and SPACY_AVAILABLE and _nlp:
             primary_surname, year = self._parse_citation_with_ner(normalized_text)
 
         # Fall back to regex patterns if NER didn't find both author and year
