@@ -176,6 +176,21 @@ class CitationValidator:
         r'(?:[a-z])?'                               # Optional year suffix
     )
 
+    # 6. "Author, n.d." / "Author and Author, n.d." / "Author et al., n.d."
+    # Citations with no date — extract the surname; year remains None and
+    # surname-only matching handles the lookup.
+    NODATE_CITATION_PATTERN = re.compile(
+        r'\b(?P<author>'
+        r'(?:(?:van der|van den|van|von|de la|de|del|della|der|den|du|da|dos|el|la|le|ten|ter)\s+)?'
+        r'[' + _CAP + r'][' + _LET + r'\-]+'
+        r')'
+        r'(?:\s+et\.?\s*al\.?'
+        r'|\s+and\s+[' + _CAP + r'][' + _LET + r'\-]+'
+        r'|\s*&\s*[' + _CAP + r'][' + _LET + r'\-]+'
+        r')?'
+        r',?\s*(?i:n\.?\s*d\.?)(?!\w)'
+    )
+
     # Author-start detector for splitting joined citations. Allows a lowercase
     # nobility/locative particle prefix ("van der Waals", "von Neumann",
     # "de la Rosa") before the capital surname.
@@ -235,6 +250,24 @@ class CitationValidator:
         E.g., 'Shah- mohamadi' -> 'Shahmohamadi'."""
         return re.sub(r'(\w)- (\w)', r'\1\2', text)
 
+    @staticmethod
+    def _split_on_top_level_semicolons(text: str) -> List[str]:
+        """Split on semicolons that are not nested inside parentheses/brackets."""
+        parts = []
+        depth = 0
+        start = 0
+        for i, ch in enumerate(text):
+            if ch in '([':
+                depth += 1
+            elif ch in ')]':
+                if depth > 0:
+                    depth -= 1
+            elif ch == ';' and depth == 0:
+                parts.append(text[start:i])
+                start = i + 1
+        parts.append(text[start:])
+        return parts
+
     def _split_multi_citations(self, citation_text: str) -> List[str]:
         """Split a Document AI entity containing multiple citations into individual parts.
 
@@ -242,9 +275,24 @@ class CitationValidator:
         - Semicolon-separated: 'Brauer et al., 2016; Castell et al., 2017'
         - Comma-separated in parens: '(Griffin et al., 2019, Van Geffen et al., 2020)'
         - Joined citations: '(Huang et al., 2023). Vavassori et al. (2024)'
+        - Mixed dated/undated: 'Verma and Jana, n.d.; Wang et al., 2022'
         """
         normalized = ' '.join(citation_text.split())
         normalized = self._fix_line_break_hyphens(normalized)
+
+        # Split on top-level semicolons first. Semicolons unambiguously
+        # separate author-year citations and don't normally appear inside a
+        # single citation, so this catches cases the year-anchored split
+        # below misses (e.g. "n.d." has no year for the regex to anchor on).
+        semi_parts = self._split_on_top_level_semicolons(normalized)
+        if len(semi_parts) > 1:
+            results = []
+            for part in semi_parts:
+                cleaned = part.strip(' ;,.\t')
+                if not cleaned:
+                    continue
+                results.extend(self._split_multi_citations(cleaned))
+            return results if results else [normalized]
 
         # Find all 4-digit years in the text
         year_matches = list(re.finditer(r'\b(19|20)\d{2}[a-z]?\b', normalized))
@@ -395,6 +443,12 @@ class CitationValidator:
         # We prioritize the year appearing earlier in the string (after authors)
         year_match = re.search(self.YEAR_PATTERN, cleaned_text)
 
+        # If no year is found, fall back to "n.d." (no date) as the marker
+        # that separates the author segment from the title segment.
+        nodate_match = None
+        if not year_match:
+            nodate_match = re.search(r'\bn\.?\s*d\.?(?=\s|[.,;])', cleaned_text, re.IGNORECASE)
+
         primary_surname = "Unknown"
         all_authors = []
         year = None
@@ -457,6 +511,37 @@ class CitationValidator:
                 title = cleaned_title_seg.rstrip('.').strip()
             else:
                 title = cleaned_title_seg[:50] + "..." if len(cleaned_title_seg) > 50 else cleaned_title_seg
+
+        elif nodate_match:
+            # "n.d." used in place of a year — extract author segment from
+            # before the marker so the surname can still be matched.
+            start_index = nodate_match.start()
+            author_segment = cleaned_text[:start_index].strip().rstrip('.,;:')
+            if ',' in author_segment:
+                primary_surname = author_segment.split(',')[0].strip()
+            elif author_segment.split():
+                primary_surname = author_segment.split()[0].strip()
+
+            surname_pattern = re.compile(r'\b([A-ZÀ-ɏ][a-zA-ZÀ-ɏ\'\-]+)\b')
+            all_authors = [
+                a for a in surname_pattern.findall(author_segment)
+                if len(a) > 1 and a.lower() not in ('et', 'al', 'and', 'the', 'in', 'of')
+            ]
+
+            title_segment = cleaned_text[nodate_match.end():].lstrip('.,:;\"\' \t')
+            sentence_split = re.search(
+                r'\.\s+(?=[A-ZÀ-ÖØ-ÞĀ-ɏ][a-zÀ-ɏ])',
+                title_segment
+            )
+            if sentence_split:
+                title = title_segment[:sentence_split.start()].strip()
+                remaining = title_segment[sentence_split.end():].strip()
+                if remaining:
+                    additional_info = remaining
+            elif title_segment.endswith('.'):
+                title = title_segment.rstrip('.').strip()
+            else:
+                title = title_segment[:50] + "..." if len(title_segment) > 50 else title_segment
 
         else:
             issues.append("No valid year found")
@@ -540,6 +625,14 @@ class CitationValidator:
                                 if comma_match:
                                     primary_surname = comma_match.group('author').strip()
                                     year = comma_match.group('year')
+
+        # No-date fallback: "Author, n.d." style citations have no year, so
+        # the year-based patterns above can't anchor on them. Year stays None
+        # and surname-only matching takes over.
+        if not primary_surname:
+            nd_match = self.NODATE_CITATION_PATTERN.search(normalized_text)
+            if nd_match:
+                primary_surname = nd_match.group('author').strip()
 
         # Surname-only fallback: if no patterns matched, try to extract just the author name
         # Handles truncated citations like "Berends et al.," with no year
