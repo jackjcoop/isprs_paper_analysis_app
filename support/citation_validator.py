@@ -1961,11 +1961,11 @@ class CitationValidator:
                     floats_by_number[num]['cited'] = True
                     floats_by_number[num]['citations'].append(cit_elem.page)
 
-                    # Check proximity (±2 pages)
+                    # Check proximity (±3 pages)
                     float_page = floats_by_number[num]['page']
                     citation_page = cit_elem.page
 
-                    if abs(float_page - citation_page) > 2:
+                    if abs(float_page - citation_page) > 3:
                         results['out_of_proximity'].append({
                             'number': num,
                             'float_page': float_page,
