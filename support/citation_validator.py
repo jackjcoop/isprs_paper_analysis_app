@@ -330,11 +330,22 @@ class CitationValidator:
         normalized = ' '.join(citation_text.split())
         normalized = self._fix_line_break_hyphens(normalized)
 
+        # Strip balanced outer parens so that internal semicolons aren't
+        # treated as "nested" by the depth-aware splitter. A whole-paren
+        # multi-citation like "(A et al., 2022; B et al., n.d.; C, 2020)"
+        # has every ';' at depth 1 — without stripping, the semicolon
+        # split below produces only one part.
+        inner = normalized
+        if inner.startswith('(') and inner.endswith(')'):
+            candidate = inner[1:-1]
+            if candidate.count('(') == candidate.count(')'):
+                inner = candidate
+
         # Split on top-level semicolons first. Semicolons unambiguously
         # separate author-year citations and don't normally appear inside a
         # single citation, so this catches cases the year-anchored split
         # below misses (e.g. "n.d." has no year for the regex to anchor on).
-        semi_parts = self._split_on_top_level_semicolons(normalized)
+        semi_parts = self._split_on_top_level_semicolons(inner)
         if len(semi_parts) > 1:
             results = []
             for part in semi_parts:
@@ -385,6 +396,19 @@ class CitationValidator:
                 cit_text = cit_text[1:].strip(';,. \t')
             if cit_text:
                 citations.append(cit_text)
+
+        # If a chunk ended up as just a bare year (e.g. "Smith et al.,
+        # 2025, 2020" → ["Smith et al., 2025", "2020"]), inherit the
+        # previous chunk's author prefix so it parses as a real citation.
+        bare_year_re = re.compile(r'^\(?\s*(?:19|20)\d{2}[a-z]?\)?$')
+        for i in range(1, len(citations)):
+            if bare_year_re.match(citations[i]):
+                prev = citations[i - 1]
+                prev_year = re.search(r'\b(?:19|20)\d{2}[a-z]?\b', prev)
+                if prev_year:
+                    author_prefix = prev[:prev_year.start()].rstrip(' ,;.')
+                    if author_prefix:
+                        citations[i] = f"{author_prefix}, {citations[i]}"
 
         return citations if citations else [normalized]
 
