@@ -613,9 +613,10 @@ class ComplianceValidator:
 
     def _check_numeric_style_citations(self, citation_results: Dict) -> set:
         """Detect numeric/IEEE-style in-text citations (e.g. "[1]", "[2, 3]",
-        "Smith et al. [8]"). ISPRS requires Harvard (author-year) format, so
-        these are flagged as a citation-format issue rather than as orphan
-        citations against the bibliography.
+        "Smith et al. [8]"). The ISPRS formatting guidelines specify the
+        author-year citation style, so these are flagged as a citation-
+        format issue rather than as orphan citations against the
+        bibliography.
 
         Returns:
             Set of original citation texts flagged as numeric-style, so the
@@ -641,7 +642,8 @@ class ComplianceValidator:
                 if cit.bbox:
                     instance_msg = (
                         f"Citation '{cit.text}' uses numeric/IEEE format. "
-                        f"ISPRS requires Harvard (author-year) citation style."
+                        f"Refer to the ISPRS formatting guidelines for the "
+                        f"required author-year citation style."
                     )
                     element_refs.append((cit.page, cit.bbox, instance_msg))
 
@@ -654,7 +656,8 @@ class ComplianceValidator:
                 severity=Severity.WARNING,
                 message=f"Found {len(numeric_examples)} citation(s) using numeric/IEEE format",
                 details=(
-                    f"ISPRS requires Harvard (author-year) citations. "
+                    f"Refer to the ISPRS formatting guidelines for the "
+                    f"required author-year citation style. "
                     f"Affected: {'; '.join(shown)}{suffix}"
                 ),
                 element_refs=element_refs if element_refs else None,
