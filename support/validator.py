@@ -1196,6 +1196,30 @@ class ComplianceValidator:
         return any(alias in normalized for alias in TIMES_FONT_ALIASES)
 
     @staticmethod
+    def _font_is_opaque(font_name: str) -> bool:
+        """True for generic/opaque PDF font names that don't reveal the
+        underlying typeface (e.g. "CIDFont+F2", "F1", "TT0"). These are
+        common when a PDF embeds a subset under a generic identifier and
+        the actual font (often Times) is invisible to extractors. Treat
+        them as exempt from the Times-New-Roman check rather than flagging
+        a typeface we can't actually verify.
+        """
+        if not font_name:
+            return False
+        # Strip subset prefix(es) like "ABCDEF+" and any leading "CIDFont+"
+        # so "ABCDEF+CIDFont+F2" reduces to "F2".
+        parts = font_name.split('+')
+        bare = parts[-1].strip()
+        # Generic font identifiers: "F1", "F12", "TT3", "Font1", or
+        # the bare "CIDFont+F2" form (handled by checking the second-to-
+        # last part for "CIDFont").
+        if re.fullmatch(r'(?:CIDFont|Font|F|TT)\s*\d+', bare, re.IGNORECASE):
+            return True
+        if len(parts) >= 2 and parts[-2].strip().lower() == 'cidfont':
+            return True
+        return False
+
+    @staticmethod
     def _looks_like_bullet_list(text: str) -> bool:
         """True if the element's text looks like a bullet or numbered list.
 
@@ -1329,6 +1353,8 @@ class ComplianceValidator:
                 char_count = len(span_text)
                 if self._font_is_math(span_font):
                     continue  # math/symbol chars are exempt
+                if self._font_is_opaque(span_font):
+                    continue  # opaque CID/generic names — typeface unverifiable
                 non_math_chars += char_count
                 if self._font_is_times(span_font):
                     times_chars += char_count
@@ -1336,13 +1362,17 @@ class ComplianceValidator:
             if non_math_chars > 0:
                 # If >50% of non-math text uses Times, consider it OK
                 return times_chars / non_math_chars > 0.5
-            # Element is entirely math fonts — treat as OK (it's effectively
-            # a formula that wasn't tagged as an Equation by Document AI).
+            # Element is entirely math/opaque fonts — treat as OK. Either
+            # it's effectively a formula not tagged as an Equation, or the
+            # PDF used a CID subset whose underlying typeface we can't
+            # identify; flagging would be a false positive.
             return True
 
         # Fall back to element-level font_name
         if hasattr(elem, 'font_name') and elem.font_name:
             if self._font_is_math(elem.font_name):
+                return True
+            if self._font_is_opaque(elem.font_name):
                 return True
             return self._font_is_times(elem.font_name)
 
