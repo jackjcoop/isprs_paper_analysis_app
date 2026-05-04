@@ -1856,6 +1856,47 @@ class ComplianceValidator:
                     details=f"Found sub-headings: {sorted(set(sub_heading_nums))}"
                 ))
 
+        # Check heading number formatting — must have a space after the
+        # period (e.g. "1. Introduction" not "1.Introduction"). Scan
+        # Headings, Sub_Headings, and Sub_sub_Headings; missing-space
+        # formatting can also cause Document AI to misclassify headings,
+        # so flagging it helps the author fix the layout.
+        missing_space_re = re.compile(r'^(\d+(?:\.\d+)*)\.([A-ZÀ-ɏ])')
+        format_issues = []
+        format_refs = []
+        for elem_type in ('Headings', 'Sub_Headings', 'Sub_sub_Headings'):
+            for h in extracted_elements.get(elem_type, []):
+                text = (getattr(h, 'text', '') or '').strip()
+                m = missing_space_re.match(text)
+                if not m:
+                    continue
+                num = m.group(1)
+                label = elem_type.replace('_', '-').lower()
+                preview = text[:60] + ('...' if len(text) > 60 else '')
+                format_issues.append(f"'{preview}'")
+                if hasattr(h, 'page') and hasattr(h, 'bbox') and h.bbox:
+                    instance_msg = (
+                        f"Heading '{text[:40]}' is missing a space after "
+                        f"the period — should be '{num}. {text[len(num)+1:][:40]}'"
+                    )
+                    format_refs.append((h.page, h.bbox, instance_msg))
+
+        if format_issues:
+            shown = format_issues[:6]
+            suffix = f' (and {len(format_issues) - 6} more)' if len(format_issues) > 6 else ''
+            self.results.append(ValidationResult(
+                check_name="Heading Format",
+                passed=False,
+                severity=Severity.WARNING,
+                message=f"{len(format_issues)} heading(s) missing space after the period",
+                details=(
+                    f"Headings should have a space after the period "
+                    f"(e.g. '1. Introduction' not '1.Introduction'). "
+                    f"Affected: {'; '.join(shown)}{suffix}"
+                ),
+                element_refs=format_refs if format_refs else None,
+            ))
+
     def _check_element_numbering_order(
         self,
         extracted_elements: Dict[str, List],
