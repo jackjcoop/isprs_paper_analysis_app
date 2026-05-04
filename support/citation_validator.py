@@ -1258,21 +1258,31 @@ class CitationValidator:
                 continue
 
             # Validate each candidate split:
-            #   (a) text after split must contain a year within 300 chars,
-            #   (b) the chunk after the split must not look like a co-editor
+            #   (a) the chunk BEFORE the split must contain a year (otherwise
+            #       we are splitting mid-author-list before the year of the
+            #       *current* reference — e.g. "..., Eglin, T.. Hedlund, K.,"
+            #       where the typo'd "T.." is followed by a co-author),
+            #   (b) the chunk AFTER the split must contain a year within
+            #       300 chars,
+            #   (c) the chunk AFTER must not look like a co-editor
             #       continuation ('.. (Eds.), Title ..'). A book-chapter ref
             #       like 'in: Awe, O.O., A. Vance, E. (Eds.), Practical ...'
             #       has the comma+initial+period split pattern internally,
             #       but the text after the split is just the next editor's
             #       name followed by '(Eds.)' / '(Ed.)' / 'editors,'.
             valid_positions = []
+            last_valid_start = 0
             for m in splits:
+                before = cleaned[last_valid_start:m.start()]
+                if not re.search(r'\b(19\d{2}|20\d{2})\b', before):
+                    continue
                 after = cleaned[m.end():m.end() + 300]
                 if not re.search(r'\b(19\d{2}|20\d{2})\b', after):
                     continue
                 if self._EDITOR_CONTINUATION_RE.match(after):
                     continue
                 valid_positions.append(m.end())
+                last_valid_start = m.end()
 
             if not valid_positions:
                 result.append(elem)
