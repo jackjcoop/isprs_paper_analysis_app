@@ -1064,23 +1064,34 @@ class ComplianceValidator:
 
     @staticmethod
     def _looks_like_bullet_list(text: str) -> bool:
-        """True if the element's text looks like a bullet/numbered list.
+        """True if the element's text looks like a bullet or numbered list.
 
         Each item in such a list legitimately ends mid-line, so the body
         justification check shouldn't penalize them. We require at least
-        two non-empty lines whose first non-whitespace char is an
-        unambiguous bullet marker, and that those bullet lines make up
-        at least half of the non-empty lines.
+        two non-empty lines whose first token is an unambiguous list
+        marker (bullet glyph, "1.", "(1)", "1)", "a)", or similar), and
+        that those marker lines make up at least half of the non-empty
+        lines.
         """
         BULLET_CHARS = set('•◦▪‣⁃→◆◇★●○■□')
+        # Numbered/lettered list markers anchored at the start of a line:
+        #   "1.", "12.", "1)", "(1)", "(12)", "a.", "a)", "(a)"
+        # The marker must be followed by whitespace, end-of-line, or be
+        # the entire line so we don't match things like "1.5 m" or "2024.".
+        NUM_MARKER = re.compile(r'^\(?(?:\d{1,2}|[a-zA-Z])[\.\)](?=\s|$)')
         if not text:
             return False
         lines = [ln.strip() for ln in text.split('\n')]
         nonempty = [ln for ln in lines if ln]
         if len(nonempty) < 2:
             return False
-        bullet_lines = sum(1 for ln in nonempty if ln[:1] in BULLET_CHARS)
-        return bullet_lines >= 2 and bullet_lines >= len(nonempty) * 0.5
+        marker_lines = 0
+        for ln in nonempty:
+            if ln[:1] in BULLET_CHARS:
+                marker_lines += 1
+            elif NUM_MARKER.match(ln):
+                marker_lines += 1
+        return marker_lines >= 2 and marker_lines >= len(nonempty) * 0.5
 
     @staticmethod
     def _font_is_math(font_name: str) -> bool:
