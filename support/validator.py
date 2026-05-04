@@ -379,12 +379,16 @@ class ComplianceValidator:
 
         # Run malformed "et al." check first so we can exclude those from orphans
         malformed_texts = self._check_malformed_et_al(citation_results)
+        # Detect numeric/IEEE-style citations (e.g. "[1]", "Smith et al. [12]") —
+        # these are a citation-format issue, not missing-reference issue.
+        numeric_style_texts = self._check_numeric_style_citations(citation_results)
+        excluded_orphan_texts = malformed_texts | numeric_style_texts
 
-        # Check for orphan citations — exclude malformed ones (they get their own box)
+        # Check for orphan citations — exclude malformed/numeric-style ones
+        # (they get their own check)
         orphan_citations = citation_results.get('orphan_citations', [])
         if orphan_citations:
-            # Filter out citations already flagged as malformed
-            clean_orphans = [c for c in orphan_citations if c['text'] not in malformed_texts]
+            clean_orphans = [c for c in orphan_citations if c['text'] not in excluded_orphan_texts]
 
             if clean_orphans:
                 # Build element_refs from parsed citations for PDF annotation
@@ -528,6 +532,57 @@ class ComplianceValidator:
             ))
 
         return malformed_texts
+
+    def _check_numeric_style_citations(self, citation_results: Dict) -> set:
+        """Detect numeric/IEEE-style in-text citations (e.g. "[1]", "[2, 3]",
+        "Smith et al. [8]"). ISPRS requires Harvard (author-year) format, so
+        these are flagged as a citation-format issue rather than as orphan
+        citations against the bibliography.
+
+        Returns:
+            Set of original citation texts flagged as numeric-style, so the
+            caller can exclude them from orphan citation reporting.
+        """
+        import re as _re
+
+        # Bracketed digit list: [1], [2, 3], [16, 17], [19, 20, 21], [3-5]
+        numeric_re = _re.compile(r'\[\s*\d+(?:\s*[,;\-]\s*\d+)*\s*\]')
+
+        citations_parsed = citation_results.get('citations_parsed', [])
+        element_refs = []
+        numeric_examples = []
+        numeric_texts: set = set()
+
+        for cit in citations_parsed:
+            if cit.citation_type != 'reference':
+                continue
+            if numeric_re.search(cit.text):
+                numeric_texts.add(cit.text)
+                label = f"'{cit.text[:50]}{'...' if len(cit.text) > 50 else ''}'"
+                numeric_examples.append(label)
+                if cit.bbox:
+                    instance_msg = (
+                        f"Citation '{cit.text}' uses numeric/IEEE format. "
+                        f"ISPRS requires Harvard (author-year) citation style."
+                    )
+                    element_refs.append((cit.page, cit.bbox, instance_msg))
+
+        if numeric_examples:
+            shown = numeric_examples[:8]
+            suffix = f' (and {len(numeric_examples) - 8} more)' if len(numeric_examples) > 8 else ''
+            self.results.append(ValidationResult(
+                check_name="Citation Format",
+                passed=False,
+                severity=Severity.WARNING,
+                message=f"Found {len(numeric_examples)} citation(s) using numeric/IEEE format",
+                details=(
+                    f"ISPRS requires Harvard (author-year) citations. "
+                    f"Affected: {'; '.join(shown)}{suffix}"
+                ),
+                element_refs=element_refs if element_refs else None,
+            ))
+
+        return numeric_texts
 
     def _check_figures_tables(self, figure_table_results: Dict):
         """Check figure and table citation validation results."""
