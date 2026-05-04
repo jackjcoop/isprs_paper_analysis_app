@@ -1006,6 +1006,26 @@ class ComplianceValidator:
         return any(alias in normalized for alias in TIMES_FONT_ALIASES)
 
     @staticmethod
+    def _looks_like_bullet_list(text: str) -> bool:
+        """True if the element's text looks like a bullet/numbered list.
+
+        Each item in such a list legitimately ends mid-line, so the body
+        justification check shouldn't penalize them. We require at least
+        two non-empty lines whose first non-whitespace char is an
+        unambiguous bullet marker, and that those bullet lines make up
+        at least half of the non-empty lines.
+        """
+        BULLET_CHARS = set('•◦▪‣⁃→◆◇★●○■□')
+        if not text:
+            return False
+        lines = [ln.strip() for ln in text.split('\n')]
+        nonempty = [ln for ln in lines if ln]
+        if len(nonempty) < 2:
+            return False
+        bullet_lines = sum(1 for ln in nonempty if ln[:1] in BULLET_CHARS)
+        return bullet_lines >= 2 and bullet_lines >= len(nonempty) * 0.5
+
+    @staticmethod
     def _font_is_math(font_name: str) -> bool:
         """Check if a font name is a math/symbol font (used for formulas).
 
@@ -2118,6 +2138,13 @@ class ComplianceValidator:
         total_checked = 0
 
         for elem in main_texts:
+            # Skip bulleted/numbered lists — each item legitimately ends
+            # mid-line, so the "interior line reaches right edge" rule
+            # doesn't apply.
+            elem_text = getattr(elem, 'text', '') or ''
+            if self._looks_like_bullet_list(elem_text):
+                continue
+
             line_bboxes = _group_lines(elem.spans)
             # Need at least 3 lines to judge justification meaningfully
             # (single-line and 2-line paragraphs may legitimately be short)
