@@ -271,6 +271,42 @@ class CitationValidator:
         return ''.join(c for c in nfkd if not unicodedata.combining(c)).lower()
 
     @staticmethod
+    def _looks_like_prose_paragraph(text: str) -> bool:
+        """True if a "References" element is actually a body-text paragraph
+        (e.g. a conclusion or summary) Document AI swept into the References
+        stream. Real references either:
+          - have an early comma (after the first word's surname/initial), or
+          - lead with two consecutive capitalized words (organisation name).
+        Prose paragraphs typically start with a pronoun/article ("This",
+        "We", "The", ...) followed by a lowercase word and lack the early
+        comma signal.
+        """
+        if not text:
+            return False
+        head = text.strip()
+        first_two = re.match(r'^(\S+)\s+(\S+)', head)
+        if not first_two:
+            return False
+        w1, w2 = first_two.group(1), first_two.group(2)
+        if not w1 or not w2:
+            return False
+        # Real refs almost always have a comma within the first ~50 chars
+        # (after the surname or organisation name). Its absence is suspicious.
+        has_early_comma = ',' in head[:50]
+        # Two consecutive capitalised tokens signal an organisational author
+        # ("Food Systems...", "United Nations..."). Use isupper on the first
+        # alphabetic char to allow tokens with leading punctuation.
+        def _starts_upper(token: str) -> bool:
+            for ch in token:
+                if ch.isalpha():
+                    return ch.isupper()
+            return False
+        starts_titlecase_pair = _starts_upper(w1) and _starts_upper(w2)
+        if not has_early_comma and not starts_titlecase_pair:
+            return True
+        return False
+
+    @staticmethod
     def _looks_like_figure_content(text: str) -> bool:
         """True if a "References" element is actually misclassified figure
         content (caption, panel labels, chart data). Document AI sometimes
@@ -1549,11 +1585,14 @@ class CitationValidator:
         # - _merge_column_spanning_references() for References at column/page boundaries
         combined_refs = ref_elements
         # Filter out elements Document AI mis-classified as References — most
-        # commonly figure captions, chart data blocks, or panel labels that
-        # got swept into the References stream. These would otherwise be
-        # parsed as bogus references and surface as "uncited".
-        combined_refs = [r for r in combined_refs
-                         if not self._looks_like_figure_content(getattr(r, 'text', '') or '')]
+        # commonly figure captions, chart data blocks, panel labels, or body
+        # prose (conclusion paragraphs, etc.) that got swept into the
+        # References stream. These would otherwise be parsed as bogus
+        # references and surface as "uncited".
+        def _is_misclassified(r) -> bool:
+            t = getattr(r, 'text', '') or ''
+            return self._looks_like_figure_content(t) or self._looks_like_prose_paragraph(t)
+        combined_refs = [r for r in combined_refs if not _is_misclassified(r)]
         # Split references that Document AI merged into a single text block
         combined_refs = self._split_merged_references(combined_refs)
 
