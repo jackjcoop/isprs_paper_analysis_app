@@ -1705,6 +1705,36 @@ class CitationValidator:
                     return True
             return False
 
+        # Locate the "References" heading so we can drop any "References"
+        # element that sits BEFORE it in reading order — a real bibliography
+        # entry can never appear above its own section heading. Use a
+        # column-aware position key (page, column, y) to match the document's
+        # actual reading flow.
+        _MID_X = 595 / 2
+        def _reading_pos(elem) -> Optional[Tuple[int, int, float]]:
+            p = getattr(elem, 'page', None)
+            bb = getattr(elem, 'bbox', None)
+            if p is None or not bb:
+                return None
+            x_center = (bb[0] + bb[2]) / 2
+            col = 0 if x_center < _MID_X else 1
+            return (p, col, bb[1])
+
+        ref_heading_pos: Optional[Tuple[int, int, float]] = None
+        for h in extracted_elements.get('Headings', []):
+            text = (getattr(h, 'text', '') or '').strip().lower()
+            if text.startswith('references'):
+                ref_heading_pos = _reading_pos(h)
+                break
+
+        def _is_above_references_heading(r) -> bool:
+            if ref_heading_pos is None:
+                return False
+            r_pos = _reading_pos(r)
+            if r_pos is None:
+                return False
+            return r_pos < ref_heading_pos
+
         # Filter out elements Document AI mis-classified as References — most
         # commonly figure captions, chart data blocks, panel labels, or body
         # prose (conclusion paragraphs, etc.) that got swept into the
@@ -1712,6 +1742,12 @@ class CitationValidator:
         # references and surface as "uncited".
         def _is_misclassified(r) -> bool:
             t = getattr(r, 'text', '') or ''
+            # Position veto: anything labelled as a reference but located
+            # ABOVE the "References" section heading in reading order can't
+            # be a real bibliography entry (the bibliography starts AT or
+            # AFTER its own heading). Drop these regardless of text shape.
+            if _is_above_references_heading(r):
+                return True
             # Recovery: if the element's leading text looks like figure/
             # prose content but a real "Surname, I., ..., YYYY." reference
             # cluster sits *inside* it, keep the element. parse_reference's
