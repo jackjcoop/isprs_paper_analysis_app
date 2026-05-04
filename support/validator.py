@@ -2604,6 +2604,16 @@ class ComplianceValidator:
         MIN_FULL_KEY_TO_ABSTRACT = 30
         MAX_FULL_KEY_TO_ABSTRACT = 60
         FULL_KEY_TO_ABSTRACT_LABEL = '2 blank lines + Abstract label + 1 blank line (~45pt)'
+        # Affiliations -> Keywords: ISPRS papers typically include a
+        # Commission/Working Group designation line between affiliations and
+        # keywords (e.g. "Commission III, WG III/2"). Document AI rarely
+        # extracts that line as its own element, so the visible gap can be
+        # ~22pt (no Commission line) up to ~55pt (blank + Commission + 2
+        # blanks). Allow the wider range so conforming papers don't trip on
+        # the missing-element extraction.
+        MIN_AFFIL_TO_KEYWORDS = MIN_TWO_BLANK
+        MAX_AFFIL_TO_KEYWORDS = 60
+        AFFIL_TO_KEYWORDS_LABEL = '2 blank lines (~22pt), or with optional Commission line (~45pt)'
 
         # Whether an Abstract_title element is present — controls fallback
         # expectations when Keywords is followed directly by Abstract body.
@@ -2627,7 +2637,9 @@ class ComplianceValidator:
             #                                            line + 1 blank line
             min_gap = max_gap = expected_label = None
             if curr_type in ('Authors', 'Affiliations') and next_type == 'Keywords':
-                min_gap, max_gap, expected_label = MIN_TWO_BLANK, MAX_TWO_BLANK, TWO_BLANK_LABEL
+                min_gap, max_gap, expected_label = (
+                    MIN_AFFIL_TO_KEYWORDS, MAX_AFFIL_TO_KEYWORDS, AFFIL_TO_KEYWORDS_LABEL
+                )
             elif curr_type == 'Keywords' and next_type == 'Abstract_title':
                 min_gap, max_gap, expected_label = MIN_TWO_BLANK, MAX_TWO_BLANK, TWO_BLANK_LABEL
             elif curr_type == 'Abstract_title' and next_type == 'Abstract':
