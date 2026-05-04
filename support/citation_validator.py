@@ -289,6 +289,38 @@ class CitationValidator:
         return ''.join(c for c in nfkd if not unicodedata.combining(c)).lower()
 
     @staticmethod
+    def _looks_like_journal_fragment(text: str) -> bool:
+        """True if a "References" element is just a journal-name +
+        volume/page/DOI tail — the continuation of a reference whose author
+        block lives in another element/column. Document AI sometimes drops
+        such tails into the References stream as their own element, where
+        they'd otherwise parse as phantom references like "Information
+        System (2019)" anchored on a year extracted from the DOI URL.
+
+        Signals (all must hold):
+          - Has clear journal-metadata markers ("Vol", "ISSN", "pp.",
+            "doi", or a "vol, pages" page-range pattern).
+          - Lacks any "Surname, I." author-initial pattern in the leading
+            text (real references always lead with one).
+        """
+        if not text:
+            return False
+        head = text.strip()
+        early = head[:300]
+        has_journal_metadata = bool(re.search(
+            r'\b(?:Volume\b|Vol\.|ISSN\b|pp\.|doi[\s:.])', early, re.IGNORECASE,
+        )) or bool(re.search(r'\b\d+\s*,\s*\d+\s*[\-–]\s*\d+\b', early))
+        if not has_journal_metadata:
+            return False
+        has_author_initial = bool(re.search(
+            r'[A-ZÀ-ɏ][a-zA-ZÀ-ɏ\-\'’]+,\s+(?:[A-Z]\.?\s*){1,3}[,\s]',
+            early,
+        ))
+        if has_author_initial:
+            return False
+        return True
+
+    @staticmethod
     def _looks_like_prose_paragraph(text: str) -> bool:
         """True if a "References" element is actually a body-text paragraph
         (e.g. a conclusion or summary) Document AI swept into the References
@@ -1760,6 +1792,8 @@ class CitationValidator:
             if self._looks_like_figure_content(t):
                 return True
             if self._looks_like_prose_paragraph(t):
+                return True
+            if self._looks_like_journal_fragment(t):
                 return True
             if _overlaps_caption(r):
                 return True
