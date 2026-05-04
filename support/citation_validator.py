@@ -247,8 +247,58 @@ class CitationValidator:
     @staticmethod
     def _fix_line_break_hyphens(text: str) -> str:
         """Fix hyphens introduced by line breaks in PDF extraction.
-        E.g., 'Shah- mohamadi' -> 'Shahmohamadi'."""
-        return re.sub(r'(\w)- (\w)', r'\1\2', text)
+        E.g., 'Shah- mohamadi' -> 'Shahmohamadi'.
+
+        Only merge when the character after the space is lowercase — a
+        capitalized word after the hyphen typically signals a new
+        sentence or proper noun (e.g. 'data- Caesar' is *not* a
+        hyphenation break) and merging across that boundary destroys
+        downstream reference parsing.
+        """
+        return re.sub(r'(\w)- ([a-zà-öø-ÿā-ɏ])', r'\1\2', text)
+
+    # Author-year reference pattern used to find the start of a real
+    # reference inside an element that Document AI bundled with non-
+    # reference content (figure captions, abstract paragraphs, etc.).
+    _REF_INITIAL = r'[A-Z]\.(?:\s*[A-Z]\.)*'
+    _REF_SURNAME = r"[A-Z][a-zA-Z\-']+"
+    _REF_AUTHOR = _REF_SURNAME + r',\s+' + _REF_INITIAL
+    _REF_START_PATTERN = re.compile(
+        r'(?<![A-Za-z\-])'
+        + _REF_AUTHOR
+        + r'(?:,\s+' + _REF_AUTHOR + r')*'
+        + r',?\s+(?:19\d{2}|20\d{2})[a-z]?\.'
+    )
+
+    @classmethod
+    def _strip_non_reference_prefix(cls, text: str) -> str:
+        """If the text *clearly* starts with non-reference content
+        (figure caption, abstract paragraph, sentence prose) but contains
+        a real Surname, I., ..., YYYY. cluster further in, trim the
+        leading non-reference content.
+
+        Trim only when the leading text is unambiguously not a reference
+        (figure sub-label like '(a)' / '(d)', 'Figure'/'Table' caption,
+        or starts with a lowercase letter / digit / opening quote).
+        Refs like 'Jefriza, Yusoff, I.M., 2020' where the first author
+        has a non-standard format must be left alone.
+        """
+        stripped = text.lstrip()
+        if not stripped:
+            return text
+
+        looks_non_reference = bool(
+            re.match(r'^\([a-zA-Z]\)\s', stripped)        # "(a) ", "(d) "
+            or re.match(r'^(?:Figure|Table|Fig\.|Tab\.)\s', stripped, re.IGNORECASE)
+            or re.match(r'^[a-z\d"“‘\'`]', stripped)      # lowercase / digit / quote
+        )
+        if not looks_non_reference:
+            return text
+
+        m = cls._REF_START_PATTERN.search(text)
+        if m and m.start() > 0:
+            return text[m.start():]
+        return text
 
     @staticmethod
     def _split_on_top_level_semicolons(text: str) -> List[str]:
@@ -429,6 +479,10 @@ class CitationValidator:
         cleaned_text = self._clean_text(reference_text)
         # Fix line-break hyphens (e.g., "Houwel- ing" -> "Houweling")
         cleaned_text = self._fix_line_break_hyphens(cleaned_text)
+        # If Document AI bundled non-reference text (figure captions,
+        # abstract paragraphs) ahead of the actual reference, isolate the
+        # real Surname, I., ..., YYYY. cluster and drop the leading garbage.
+        cleaned_text = self._strip_non_reference_prefix(cleaned_text)
         issues = []
         is_valid = True
 
