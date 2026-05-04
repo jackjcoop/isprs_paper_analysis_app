@@ -31,6 +31,20 @@ TIMES_FONT_ALIASES = [
     'timesnewromps',   # PostScript variant
 ]
 
+# Math/symbol fonts that legitimately appear inside body text alongside Times
+# (variable names, operators, formula fragments) and shouldn't count against
+# the "Times New Roman" check.
+MATH_FONT_ALIASES = [
+    'cambriamath',
+    'latinmodernmath', 'lmmath',
+    'stixmath', 'xits',
+    'asanamath',
+    'mathjax',
+    'symbol',           # Symbol, SymbolMT
+    'msam', 'msbm',     # AMS math fonts
+    'mtpro', 'mtsymbol',
+]
+
 FONT_REQUIREMENTS = {
     'Title': {'size': 12, 'bold': True, 'centered': True},
     'Authors': {'size': 9, 'bold': False, 'centered': True},
@@ -991,6 +1005,24 @@ class ComplianceValidator:
         normalized = re.sub(r'[\s\-_]', '', font_name).lower()
         return any(alias in normalized for alias in TIMES_FONT_ALIASES)
 
+    @staticmethod
+    def _font_is_math(font_name: str) -> bool:
+        """Check if a font name is a math/symbol font (used for formulas).
+
+        Recognizes Computer Modern variants (CMR, CMBX, CMMI, CMSY, CMEX,
+        CMSL, CMTI, CMTT, CMSS, CMCSC + size digit), AMS math fonts, and
+        common math/symbol family names.
+        """
+        if not font_name:
+            return False
+        # Strip subset prefix (e.g. "ABCDEF+CMR9" -> "CMR9")
+        bare = font_name.split('+', 1)[-1] if '+' in font_name else font_name
+        normalized = re.sub(r'[\s\-_]', '', bare).lower()
+        # Computer Modern: cm + 1-4 letter modifier + size digit
+        if re.match(r'^cm[a-z]{1,4}\d', normalized):
+            return True
+        return any(alias in normalized for alias in MATH_FONT_ALIASES)
+
     def _spans_distributed_across_columns(self, elem, page_width: float) -> bool:
         """Return True if a wide element's text spans straddle the page
         midpoint with substantial content on both sides.
@@ -1059,29 +1091,38 @@ class ComplianceValidator:
     def _is_times_font(self, elem) -> bool:
         """
         Check if element uses Times font, accounting for mixed-font paragraphs.
-        If element has spans, check if majority of text (by character count) uses Times.
-        This allows paragraphs with math symbols (σ, q in CambriaMath) to pass
-        if the majority of text is still Times New Roman.
+        If element has spans, check if majority of *non-math* text uses Times.
+        Math fonts (Computer Modern, Cambria Math, Symbol, etc.) are excluded
+        from the ratio because formulas legitimately aren't typeset in Times,
+        so an element like "where H = 2(BTQB+R)" with most chars in CMBX/CMR
+        shouldn't fail the body-text font check.
         """
         # Check spans if available (spans are TextSpan objects, not dicts)
         if hasattr(elem, 'spans') and elem.spans:
             times_chars = 0
-            total_chars = 0
+            non_math_chars = 0
             for span in elem.spans:
                 # Access as object attributes, not dict keys
                 span_text = getattr(span, 'text', '') or ''
                 span_font = getattr(span, 'font_name', '') or ''
                 char_count = len(span_text)
-                total_chars += char_count
+                if self._font_is_math(span_font):
+                    continue  # math/symbol chars are exempt
+                non_math_chars += char_count
                 if self._font_is_times(span_font):
                     times_chars += char_count
 
-            if total_chars > 0:
-                # If >50% of text uses Times, consider it OK
-                return times_chars / total_chars > 0.5
+            if non_math_chars > 0:
+                # If >50% of non-math text uses Times, consider it OK
+                return times_chars / non_math_chars > 0.5
+            # Element is entirely math fonts — treat as OK (it's effectively
+            # a formula that wasn't tagged as an Equation by Document AI).
+            return True
 
         # Fall back to element-level font_name
         if hasattr(elem, 'font_name') and elem.font_name:
+            if self._font_is_math(elem.font_name):
+                return True
             return self._font_is_times(elem.font_name)
 
         return True  # No font info, assume OK
