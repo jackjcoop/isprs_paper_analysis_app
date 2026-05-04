@@ -786,7 +786,7 @@ class ComplianceValidator:
     ):
         """Check ISPRS formatting requirements."""
         # Page count validation (6-8 page range)
-        self._check_page_count(page_count)
+        self._check_page_count(page_count, extracted_elements)
 
         # Required named sections (Introduction, Conclusions)
         self._check_required_named_sections(extracted_elements)
@@ -830,10 +830,49 @@ class ComplianceValidator:
         # Section spacing validation (title block + headings + equations)
         self._check_section_spacing(extracted_elements)
 
-    def _check_page_count(self, page_count: int):
-        """Check document is within ISPRS page bounds (6-8 pages)."""
+    def _check_page_count(self, page_count: int, extracted_elements: Dict[str, List]):
+        """Check document is within ISPRS page bounds (6-8 pages).
+
+        Splits the count into body pages and references-only pages so reviewers
+        can see at a glance how much of the document is actually content vs.
+        bibliography. A page counts as 'references-only' when it carries
+        References elements and no body content (Main_Text, figures, tables,
+        equations, or non-References headings).
+        """
         min_pages = PAGE_REQUIREMENTS['min_pages']
         max_pages = PAGE_REQUIREMENTS['max_pages']
+
+        ref_pages: set = set()
+        for elem in extracted_elements.get('References', []):
+            p = getattr(elem, 'page', None)
+            if p is not None:
+                ref_pages.add(p)
+
+        body_keys = [
+            'Main_Text', 'Sub_Headings', 'Sub_sub_Headings',
+            'Figure_Number', 'Figure_Title', 'Table_Number', 'Table_Title',
+            'Equation', 'Equation_Number',
+        ]
+        body_pages: set = set()
+        for key in body_keys:
+            for elem in extracted_elements.get(key, []):
+                p = getattr(elem, 'page', None)
+                if p is not None:
+                    body_pages.add(p)
+        # Headings count as body content unless the heading is "References"
+        for elem in extracted_elements.get('Headings', []):
+            p = getattr(elem, 'page', None)
+            if p is None:
+                continue
+            text = (getattr(elem, 'text', '') or '').strip().lower()
+            if text.startswith('references'):
+                continue
+            body_pages.add(p)
+
+        ref_only_pages = ref_pages - body_pages
+        ref_only_count = len(ref_only_pages)
+        body_page_count = max(0, page_count - ref_only_count)
+        breakdown = f"{body_page_count} body + {ref_only_count} references-only = {page_count} total"
 
         if page_count > max_pages:
             self.results.append(ValidationResult(
@@ -841,7 +880,7 @@ class ComplianceValidator:
                 passed=False,
                 severity=Severity.ERROR,
                 message=f"Too many pages: {page_count} (maximum {max_pages})",
-                details=f"ISPRS allows a maximum of {max_pages} pages"
+                details=f"{breakdown}. ISPRS allows a maximum of {max_pages} pages"
             ))
         elif page_count < min_pages:
             self.results.append(ValidationResult(
@@ -849,14 +888,14 @@ class ComplianceValidator:
                 passed=False,
                 severity=Severity.WARNING,
                 message=f"Too few pages: {page_count} (minimum {min_pages})",
-                details=f"ISPRS requires at least {min_pages} pages"
+                details=f"{breakdown}. ISPRS requires at least {min_pages} pages"
             ))
         else:
             self.results.append(ValidationResult(
                 check_name="Page Count",
                 passed=True,
                 severity=Severity.SUCCESS,
-                message=f"Page count OK: {page_count} pages",
+                message=f"Page count OK: {breakdown}",
                 details=f"Within {min_pages}-{max_pages} page range"
             ))
 
