@@ -42,6 +42,7 @@ class ParsedCitation:
     bbox: Tuple[float, float, float, float]
     citation_type: str = "reference"  # 'reference', 'figure', 'table'
     year_suffix: Optional[str] = None  # 'a', 'b', 'c' for multiple publications same author/year
+    format_issues: List[str] = field(default_factory=list)  # spacing/punctuation problems
 
     @property
     def full_year(self) -> Optional[str]:
@@ -661,6 +662,26 @@ class CitationValidator:
         # Fix line-break hyphens (e.g., "Shah- mohamadi" -> "Shahmohamadi")
         normalized_text = self._fix_line_break_hyphens(normalized_text)
 
+        # Repair common spacing defects so the patterns below can still match
+        # the underlying citation. Each defect is recorded so the validator
+        # can flag it as a citation-format issue separately from matching.
+        format_issues: List[str] = []
+        # "et al.YEAR" — period of "al." touches the year (no space/comma).
+        # Insert ", " so the existing "et al., YEAR" patterns recognize it.
+        if re.search(r'\bal\.(?=\d{4}\b)', normalized_text):
+            format_issues.append("Missing comma/space between 'al.' and year")
+            normalized_text = re.sub(r'(\bal\.)(\d{4}\b)', r'\1, \2', normalized_text)
+        # "et al. YEAR" — space but no comma between "al." and year. Insert
+        # the comma so the comma-anchored patterns match.
+        if re.search(r'\bal\.\s+(?=\d{4}\b)', normalized_text):
+            if "Missing comma after 'et al.'" not in format_issues:
+                format_issues.append("Missing comma after 'et al.'")
+            normalized_text = re.sub(r'(\bal\.)\s+(\d{4}\b)', r'\1, \2', normalized_text)
+        # "Surname,YEAR" — comma touches the year directly.
+        if re.search(r'[' + self._CAP + self._LET + r'],(?=\d{4}\b)', normalized_text):
+            format_issues.append("Missing space after comma before year")
+            normalized_text = re.sub(r'(,)(\d{4}\b)', r'\1 \2', normalized_text)
+
         # Try NER first (handles all variable formats like "Smith described in 2020")
         if SPACY_AVAILABLE and _nlp:
             primary_surname, year = self._parse_citation_with_ner(normalized_text)
@@ -751,7 +772,8 @@ class CitationValidator:
             page=page,
             bbox=bbox,
             citation_type=citation_type,
-            year_suffix=year_suffix
+            year_suffix=year_suffix,
+            format_issues=format_issues,
         )
 
     def match_citation_to_reference(self, citation: ParsedCitation, references: List[ParsedReference]) -> CitationMatch:

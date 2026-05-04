@@ -385,6 +385,9 @@ class ComplianceValidator:
         # Detect numeric/IEEE-style citations (e.g. "[1]", "Smith et al. [12]") —
         # these are a citation-format issue, not missing-reference issue.
         numeric_style_texts = self._check_numeric_style_citations(citation_results)
+        # Spacing/punctuation defects ("et al.2021", "Smith,2020") — flagged
+        # separately so the matching can still succeed with the lenient parse.
+        self._check_citation_spacing_format(citation_results)
         excluded_orphan_texts = malformed_texts | numeric_style_texts
 
         # Check for orphan citations — exclude malformed/numeric-style ones
@@ -535,6 +538,49 @@ class ComplianceValidator:
             ))
 
         return malformed_texts
+
+    def _check_citation_spacing_format(self, citation_results: Dict) -> None:
+        """Surface citation spacing/punctuation defects (e.g. "et al.2021",
+        "Smith,2020") as a "Citation Format" warning. The lenient parser
+        repairs these defects so the citation can still match against the
+        bibliography; this check exists so the original formatting issue is
+        still visible to the reviewer.
+        """
+        citations_parsed = citation_results.get('citations_parsed', [])
+        element_refs = []
+        details_parts = []
+        seen = set()
+        for cit in citations_parsed:
+            if cit.citation_type != 'reference':
+                continue
+            issues = getattr(cit, 'format_issues', None) or []
+            if not issues:
+                continue
+            key = (cit.text, tuple(issues))
+            if key in seen:
+                continue
+            seen.add(key)
+            issue_str = '; '.join(issues)
+            label = f"'{cit.text[:50]}{'...' if len(cit.text) > 50 else ''}'"
+            details_parts.append(f"{label}: {issue_str}")
+            if cit.bbox:
+                element_refs.append((
+                    cit.page,
+                    cit.bbox,
+                    f"Citation '{cit.text}' formatting issue: {issue_str}",
+                ))
+
+        if details_parts:
+            shown = details_parts[:8]
+            suffix = f' (and {len(details_parts) - 8} more)' if len(details_parts) > 8 else ''
+            self.results.append(ValidationResult(
+                check_name="Citation Format",
+                passed=False,
+                severity=Severity.WARNING,
+                message=f"Found {len(details_parts)} citation(s) with spacing/punctuation issues",
+                details=f"Affected: {'; '.join(shown)}{suffix}",
+                element_refs=element_refs if element_refs else None,
+            ))
 
     def _check_numeric_style_citations(self, citation_results: Dict) -> set:
         """Detect numeric/IEEE-style in-text citations (e.g. "[1]", "[2, 3]",
