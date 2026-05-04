@@ -407,9 +407,8 @@ class ComplianceValidator:
                         continue
                     if reason_by_text[parsed_cit.text] == "Could not parse author from citation":
                         instance_msg = (
-                            f"Citation '{parsed_cit.text}' could not be parsed — possible "
-                            f"formatting issue (e.g. missing space between 'al.' or comma and "
-                            f"year). Verify against bibliography manually."
+                            f"Citation '{parsed_cit.text}' could not be parsed. "
+                            f"Verify against bibliography manually."
                         )
                     else:
                         instance_msg = f"Citation '{parsed_cit.text}' has no matching reference in bibliography"
