@@ -353,8 +353,11 @@ class CitationValidator:
         # Both together are very specific to real references and let us
         # bypass the digit-density check without enumerating every
         # author-initial variant ("F.J.Jr.", "M", "J. A.", etc.).
+        # Accept comma or period after the surname — typos like
+        # "Miller. R.G., 1981" (period instead of comma) still mark a real
+        # reference start.
         starts_with_surname = bool(re.match(
-            r'^[A-ZÀ-ɏ][a-zA-ZÀ-ɏ\-\'’ ]+,', head,
+            r'^[A-ZÀ-ɏ][a-zA-ZÀ-ɏ\-\'’ ]+[.,]', head,
         ))
         has_year = bool(re.search(r'\b(?:19|20)\d{2}\b', head[:200]))
         starts_with_author = starts_with_surname and has_year
