@@ -853,12 +853,22 @@ class ComplianceValidator:
             ))
 
     def _check_required_named_sections(self, extracted_elements: Dict[str, List]):
-        """Verify Introduction and Conclusions headings are present."""
-        headings = extracted_elements.get('Headings', [])
+        """Verify Introduction and Conclusions headings are present.
+
+        Document AI sometimes mis-tags a top-level section as a sub-heading
+        (e.g. "5.1 Conclusion" classified as Sub_Headings instead of
+        Headings). Search across all heading levels so a misclassified
+        Conclusions/Introduction still satisfies the check.
+        """
+        headings = (
+            extracted_elements.get('Headings', [])
+            + extracted_elements.get('Sub_Headings', [])
+            + extracted_elements.get('Sub_sub_Headings', [])
+        )
 
         def _heading_text(h):
             text = getattr(h, 'text', '') or ''
-            # Strip leading numbering like "1.", "1.0", "I.", "1. "
+            # Strip leading numbering like "1.", "1.1", "1.1.1", "I.", "1. "
             return re.sub(r'^[\d\.IVXLC]+\s*\.?\s*', '', text.strip(), flags=re.IGNORECASE)
 
         normalized = [_heading_text(h).lower() for h in headings]
