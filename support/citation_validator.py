@@ -1641,10 +1641,40 @@ class CitationValidator:
             return (page, y)
 
         sorted_titles = sorted(title_elements, key=_title_reading_order)
-        for i, title in enumerate(sorted_titles, start=1):
+
+        # Each title that's already paired with an extracted Figure/Table_Number
+        # (same page, overlapping y-row) shouldn't drive an inference — the
+        # number is already in floats_by_number. We mark those titles as
+        # consumed and only walk the remaining unpaired titles.
+        def _title_paired_with_existing(title) -> bool:
+            tb = getattr(title, 'bbox', None)
+            if hasattr(tb, 'x0'):
+                tb = (tb.x0, tb.y0, tb.x1, tb.y1)
+            tp = getattr(title, 'page', None)
+            if not tb or tp is None:
+                return False
+            ty0, ty1 = tb[1], tb[3]
+            for entry in floats_by_number.values():
+                if entry.get('page') != tp:
+                    continue
+                eb = entry.get('bbox')
+                if not eb:
+                    continue
+                ey0, ey1 = eb[1], eb[3]
+                # Same caption row: title overlaps or sits just below the number
+                if ty0 <= ey1 + 15 and ty1 >= ey0 - 15:
+                    return True
+            return False
+
+        unpaired_titles = [t for t in sorted_titles if not _title_paired_with_existing(t)]
+
+        # Fill missing numbers (lowest-first) using unpaired titles only.
+        for title in unpaired_titles:
+            # Pick the smallest sequential number not already present
+            i = 1
+            while str(i) in floats_by_number:
+                i += 1
             str_i = str(i)
-            if str_i in floats_by_number:
-                continue
             title_bbox = getattr(title, 'bbox', None)
             if hasattr(title_bbox, 'x0'):
                 title_bbox = (title_bbox.x0, title_bbox.y0, title_bbox.x1, title_bbox.y1)
