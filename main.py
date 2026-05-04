@@ -442,7 +442,123 @@ class PDFComplianceAnalyzer:
                         )
                         enriched_elements.setdefault("Abstract_title", []).append(synthetic)
 
+        # Last-resort fallback: BOTH Abstract title and body are missing.
+        # Document AI sometimes fails to tag either when the abstract spans
+        # both columns (full-width block between Keywords and the first
+        # numbered heading). Use Keywords + first Heading as anchors and
+        # scan the gap region with PyMuPDF.
+        if not labels_verified["Abstract"]:
+            self._recover_abstract_from_layout(enriched_elements, pdf_path, labels_verified)
+
         return labels_verified
+
+    def _recover_abstract_from_layout(
+        self,
+        enriched_elements: Dict[str, List[EnrichedElement]],
+        pdf_path: str,
+        labels_verified: Dict[str, Any],
+    ) -> None:
+        """When Document AI tagged neither Abstract nor Abstract_title, try
+        to recover them by scanning the page region between Keywords and
+        the first numbered heading. The abstract typically sits there as a
+        full-width block, even when the rest of the page is two-column.
+        """
+        keyword_anchors = (
+            enriched_elements.get("Keywords", [])
+            + enriched_elements.get("Keywords_title", [])
+        )
+        headings = enriched_elements.get("Headings", [])
+        if not keyword_anchors or not headings:
+            return
+
+        # Lowest Keywords-element bottom per page (top of abstract region).
+        kw_bottom_by_page: Dict[int, float] = {}
+        for kw in keyword_anchors:
+            p = getattr(kw, 'page', None)
+            bb = getattr(kw, 'bbox', None)
+            if p is None or not bb:
+                continue
+            y_bottom = bb[3]
+            if p not in kw_bottom_by_page or y_bottom > kw_bottom_by_page[p]:
+                kw_bottom_by_page[p] = y_bottom
+
+        # Top of first numbered heading per page (bottom of abstract region).
+        head_top_by_page: Dict[int, float] = {}
+        for h in headings:
+            text = (getattr(h, 'text', '') or '').strip()
+            if not re.match(r'^\d+\.', text):
+                continue
+            p = getattr(h, 'page', None)
+            bb = getattr(h, 'bbox', None)
+            if p is None or not bb:
+                continue
+            y_top = bb[1]
+            if p not in head_top_by_page or y_top < head_top_by_page[p]:
+                head_top_by_page[p] = y_top
+
+        with PyMuPDFExtractor(pdf_path) as extractor:
+            for page in sorted(kw_bottom_by_page):
+                if page not in head_top_by_page:
+                    continue
+                top = kw_bottom_by_page[page] + 2
+                bottom = head_top_by_page[page] - 2
+                if bottom - top < 30:
+                    continue
+                page_width, _ = extractor.get_page_dimensions(page)
+                if page_width == 0:
+                    continue
+                spans = extractor.extract_text_from_bbox(
+                    page, (0, top, page_width, bottom),
+                )
+                if not spans:
+                    continue
+
+                # Locate the "ABSTRACT" label span (case-insensitive,
+                # tolerating a trailing colon).
+                label_span = None
+                for s in spans:
+                    t = (s.text or '').strip().lower().rstrip(':')
+                    if t == 'abstract':
+                        label_span = s
+                        break
+                if label_span is None:
+                    continue
+
+                # Body = every span whose top sits at or below the label
+                # span's bottom edge. The abstract layout is usually
+                # full-width here, so we don't constrain x.
+                label_bottom_y = label_span.bbox[3]
+                body_spans = [
+                    s for s in spans if s.bbox[1] >= label_bottom_y - 1
+                ]
+                body_text = ' '.join((s.text or '') for s in body_spans).strip()
+                if not body_text:
+                    continue
+
+                body_bbox = (
+                    min(s.bbox[0] for s in body_spans),
+                    min(s.bbox[1] for s in body_spans),
+                    max(s.bbox[2] for s in body_spans),
+                    max(s.bbox[3] for s in body_spans),
+                )
+
+                title_elem = EnrichedElement(
+                    element_type="Abstract_title",
+                    text=label_span.text,
+                    bbox=tuple(label_span.bbox),
+                    page=page,
+                )
+                body_elem = EnrichedElement(
+                    element_type="Abstract",
+                    text=body_text,
+                    bbox=body_bbox,
+                    page=page,
+                )
+                enriched_elements.setdefault("Abstract_title", []).append(title_elem)
+                enriched_elements.setdefault("Abstract", []).append(body_elem)
+                labels_verified["Abstract"] = True
+                labels_verified["Abstract_element_ref"] = (page, body_bbox)
+                return
 
     def _recover_title_from_authors(
         self,
