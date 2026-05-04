@@ -177,6 +177,31 @@ class CitationValidator:
         r'(?:[a-z])?'                               # Optional year suffix
     )
 
+    # Lenient scanner used to find parenthetical citations Document AI may
+    # have missed inside Main_Text. Tolerates "et al.YEAR" with no comma/
+    # space, "Smith,YEAR" with no space, etc. Requires either an et-al/&-
+    # author group OR an explicit comma/space separator before the year so
+    # bare "Smith2020" doesn't false-match.
+    SCAN_PARENTHETICAL_PATTERN = re.compile(
+        r'\(\s*'
+        r'(?P<author>'
+        r'(?:(?:van der|van den|van|von|de la|de|del|della|der|den|du|da|dos|el|la|le|ten|ter)\s+)?'
+        r'[' + _CAP + r'][' + _LET + r'\-]+'
+        r')'
+        r'(?:'
+        r'\s+et\.?\s*al\.?\s*,?\s*'                                          # et al, with/without comma
+        r'|'
+        r'\s*(?:and|&)\s*'
+        r'(?:(?:van der|van den|van|von|de la|de|del|della|der|den|du|da|dos|el|la|le|ten|ter)\s+)?'
+        r'[' + _CAP + r'][' + _LET + r'\-]+\s*,?\s*'                         # and/& Author
+        r'|'
+        r'[,\s]+'                                                            # plain separator
+        r')'
+        r'(?P<year>19\d{2}|20\d{2})(?:[a-z])?'
+        r'\s*\)',
+        re.MULTILINE | re.DOTALL,
+    )
+
     # 6. "Author, n.d." / "Author and Author, n.d." / "Author et al., n.d."
     # Citations with no date — extract the surname; year remains None and
     # surname-only matching handles the lookup.
@@ -244,6 +269,20 @@ class CitationValidator:
         name = name.translate(CitationValidator._EXTRA_CHAR_MAP)
         nfkd = unicodedata.normalize('NFKD', name)
         return ''.join(c for c in nfkd if not unicodedata.combining(c)).lower()
+
+    @staticmethod
+    def _normalize_citation_key(text: str) -> str:
+        """Build a comparison key for citation dedup. Collapses whitespace,
+        strips outer punctuation, lowercases, and squashes spacing defects
+        so "Sun et al.2024" and "Sun et al., 2024" map to the same key.
+        """
+        if not text:
+            return ''
+        s = ' '.join(text.split()).lower()
+        s = re.sub(r'\s*[,;]\s*', ' ', s)
+        s = re.sub(r'[\.\(\)]', '', s)
+        s = re.sub(r'\s+', ' ', s).strip()
+        return s
 
     @staticmethod
     def _fix_line_break_hyphens(text: str) -> str:
@@ -1475,6 +1514,42 @@ class CitationValidator:
                         'text': parsed_cit.text,
                         'page': parsed_cit.page,
                         'reason': match.reason
+                    })
+
+        # 2b. Scan Main_Text for citation patterns Document AI may have
+        # missed. The extractor sometimes drops citations whose spacing/
+        # punctuation is malformed (e.g. "(Sun et al.2024)"). We pick those
+        # up here so they appear in the report instead of vanishing.
+        existing_cit_texts: set = set()
+        for parsed_cit in results['citations_parsed']:
+            existing_cit_texts.add(self._normalize_citation_key(parsed_cit.text))
+
+        for elem in extracted_elements.get('Main_Text', []):
+            elem_text = getattr(elem, 'text', '') or ''
+            elem_page = getattr(elem, 'page', None)
+            elem_bbox = getattr(elem, 'bbox', None)
+            if not elem_text or elem_page is None:
+                continue
+            for m in self.SCAN_PARENTHETICAL_PATTERN.finditer(elem_text):
+                full_text = m.group(0)
+                key = self._normalize_citation_key(full_text)
+                if key in existing_cit_texts:
+                    continue
+                existing_cit_texts.add(key)
+
+                parsed_cit = self.parse_citation(
+                    full_text, elem_page, elem_bbox, 'reference',
+                )
+                results['citations_parsed'].append(parsed_cit)
+                match = self.match_citation_to_reference(
+                    parsed_cit, results['references_parsed'],
+                )
+                results['citation_matches'].append(match)
+                if not match.matched:
+                    results['orphan_citations'].append({
+                        'text': parsed_cit.text,
+                        'page': parsed_cit.page,
+                        'reason': match.reason,
                     })
 
         # 4. Find Uncited References
