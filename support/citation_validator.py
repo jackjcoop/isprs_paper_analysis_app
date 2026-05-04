@@ -1641,6 +1641,15 @@ class CitationValidator:
         # references and surface as "uncited".
         def _is_misclassified(r) -> bool:
             t = getattr(r, 'text', '') or ''
+            # Recovery: if the element's leading text looks like figure/
+            # prose content but a real "Surname, I., ..., YYYY." reference
+            # cluster sits *inside* it, keep the element. parse_reference's
+            # _strip_non_reference_prefix will trim the leading garbage and
+            # parse the embedded reference (e.g. a figure caption that ran
+            # into the bibliography on the same page).
+            embedded_ref = self._REF_START_PATTERN.search(t)
+            if embedded_ref and embedded_ref.start() > 0:
+                return False
             if self._looks_like_figure_content(t):
                 return True
             if self._looks_like_prose_paragraph(t):
