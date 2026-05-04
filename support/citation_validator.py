@@ -720,6 +720,16 @@ class CitationValidator:
         if re.search(r'[' + self._CAP + self._LET + r'],(?=\d{4}\b)', normalized_text):
             format_issues.append("Missing space after comma before year")
             normalized_text = re.sub(r'(,)(\d{4}\b)', r'\1 \2', normalized_text)
+        # Malformed year: a 5+ digit number adjacent to a year-shaped prefix
+        # (e.g. "20122" — typo for 2012). The year regex below would silently
+        # take the leading "2012" and match a real reference; flag instead so
+        # the citation surfaces as an orphan with a clear reason.
+        malformed_year_match = re.search(r'\b((?:19|20)\d{3,})\b', normalized_text)
+        if malformed_year_match:
+            format_issues.append(
+                f"Malformed year '{malformed_year_match.group(1)}' "
+                f"(expected 4 digits)"
+            )
 
         # Try NER first (handles all variable formats like "Smith described in 2020")
         if SPACY_AVAILABLE and _nlp:
@@ -823,6 +833,13 @@ class CitationValidator:
         if citation.citation_type != 'reference':
             return CitationMatch(citation, None, True, "Non-reference citation")
 
+        # Malformed year (e.g. "20122") — refuse to match. The year regex
+        # would silently truncate to a real-looking year and then fuzzy-match
+        # an adjacent reference, masking the typo from the reviewer.
+        for issue in (citation.format_issues or []):
+            if issue.startswith("Malformed year"):
+                return CitationMatch(citation, None, False, issue)
+
         if not citation.primary_surname:
             return CitationMatch(citation, None, False, "Could not parse author from citation")
         if not citation.year:
@@ -873,10 +890,19 @@ class CitationValidator:
                 # Use accent-normalized forms for fuzzy matching
                 score = difflib.SequenceMatcher(None, cit_surname_norm, ref_surname_norm).ratio()
 
-            # 4. If primary match is weak, check ALL authors in reference
+            # 4. If primary match is weak, check ALL authors in reference.
+            # Skip short tokens (≤3 chars) and Dutch/Romance/etc. particles
+            # so e.g. "De" / "Van" / "Le" don't substring-match into common
+            # surnames like "Mulder", "Vance", "Lee".
+            _PARTICLE_TOKENS = {
+                'van', 'von', 'de', 'del', 'della', 'der', 'den', 'du',
+                'da', 'dos', 'el', 'la', 'le', 'ten', 'ter',
+            }
             if score < 0.85 and ref.all_authors:
                 for author in ref.all_authors:
                     author_clean = author.lower()
+                    if len(author_clean) <= 3 or author_clean in _PARTICLE_TOKENS:
+                        continue
                     author_norm = self._normalize_name(author)
                     if cit_surname_clean == author_clean or cit_surname_norm == author_norm:
                         score = max(score, 0.95)  # Slightly lower than exact primary
