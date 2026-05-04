@@ -753,8 +753,22 @@ class CitationValidator:
                 title = title_segment[:50] + "..." if len(title_segment) > 50 else title_segment
 
         else:
+            # No year and no "n.d." marker — still extract the surname from
+            # the start so the reference shows up under its real author
+            # rather than "Unknown" in uncited/format reports. We only
+            # capture the primary surname here; without an author/title
+            # boundary, walking further would sweep in title words and
+            # cause spurious fuzzy matches against unrelated citations.
             issues.append("No valid year found")
             is_valid = False
+            head = cleaned_text.strip()
+            if ',' in head:
+                primary_surname = head.split(',')[0].strip()
+            elif head.split():
+                primary_surname = head.split()[0].strip()
+            primary_surname = primary_surname.strip('.,;()')
+            if primary_surname and len(primary_surname) > 1:
+                all_authors = [primary_surname]
 
         if not primary_surname or len(primary_surname) < 2:
             issues.append("Could not identify primary author")
