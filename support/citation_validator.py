@@ -898,12 +898,15 @@ class CitationValidator:
         author_pattern = re.compile(r'\b' + re.escape(first_author) + r'\b', re.IGNORECASE)
 
         # Citation-context regex for year — require it to appear in a citation pattern,
-        # not just as bare digits (avoids matching DOIs, page numbers, dates)
+        # not just as bare digits (avoids matching DOIs, page numbers, dates).
+        # The trailing-comma form catches multi-citation lists like
+        # "(Getis and Ord, 1992, Ord and Getis, 1995, Kumagai, 2011, ...)" —
+        # each comma-separated entry's year is followed by another comma.
         citation_year_pattern = re.compile(
             r'(?:'
             r'\(\s*' + re.escape(year) + r'[a-z]?\s*\)?'             # (2011) or (2011 — truncated
             r'|'
-            r',\s*' + re.escape(year) + r'[a-z]?\s*[);\]]'           # , 2011) or , 2011;
+            r',\s*' + re.escape(year) + r'[a-z]?\s*[,);\]]'          # , 2011, or , 2011) or , 2011;
             r'|'
             r'et\.?\s+al\.?,?\s*\(?\s*' + re.escape(year) + r'[a-z]?\s*\)?'  # et al., 2011 or et. al. (2011)
             r')'
