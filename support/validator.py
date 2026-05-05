@@ -83,6 +83,18 @@ PAGE_SIZE_TOLERANCE = 5    # ±5pt
 MARGIN_TOLERANCE = 10      # ±10pt
 CENTER_TOLERANCE = 20      # ±20pt for centering
 
+# Canonical ISPRS in-text citation forms (from guidelines §3.5).
+# Used in format-issue messages so authors see the correct structure
+# alongside the flag.
+ISPRS_CITATION_EXAMPLES = (
+    "Proper ISPRS in-text citation forms (per §3.5): "
+    "(Smith, 2020), "
+    "(Smith and Jones, 2020), "
+    "(Smith et al., 2020), "
+    "(Smith, 2020a) for year suffixes, "
+    "(GRASS Development Team, 2017) for software."
+)
+
 
 @dataclass
 class ValidationResult:
@@ -580,7 +592,8 @@ class ComplianceValidator:
                     if cit.bbox:
                         typo_refs.append((
                             cit.page, cit.bbox,
-                            f"Citation '{cit.text}' typo: {'; '.join(typo_issues)}",
+                            f"Citation '{cit.text}' typo: {'; '.join(typo_issues)}. "
+                            f"ISPRS form: (Smith et al., 2020).",
                         ))
             if other_issues:
                 key = (cit.text, tuple(other_issues))
@@ -590,7 +603,8 @@ class ComplianceValidator:
                     if cit.bbox:
                         spacing_refs.append((
                             cit.page, cit.bbox,
-                            f"Citation '{cit.text}' formatting issue: {'; '.join(other_issues)}",
+                            f"Citation '{cit.text}' formatting issue: {'; '.join(other_issues)}. "
+                            f"ISPRS form: (Smith, 2020), (Smith and Jones, 2020), or (Smith et al., 2020).",
                         ))
 
         def _truncate(parts, refs):
@@ -605,7 +619,9 @@ class ComplianceValidator:
                 passed=False,
                 severity=Severity.WARNING,
                 message=f"Found {len(typo_details)} citation(s) with typos (e.g. 'at el.' instead of 'et al.')",
-                details=f"Affected: {'; '.join(shown)}{suffix}",
+                details=(
+                    f"Affected: {'; '.join(shown)}{suffix}. {ISPRS_CITATION_EXAMPLES}"
+                ),
                 element_refs=typo_refs if typo_refs else None,
             ))
 
@@ -616,7 +632,9 @@ class ComplianceValidator:
                 passed=False,
                 severity=Severity.WARNING,
                 message=f"Found {len(spacing_details)} citation(s) with spacing/punctuation issues",
-                details=f"Affected: {'; '.join(shown)}{suffix}",
+                details=(
+                    f"Affected: {'; '.join(shown)}{suffix}. {ISPRS_CITATION_EXAMPLES}"
+                ),
                 element_refs=spacing_refs if spacing_refs else None,
             ))
 
@@ -653,8 +671,9 @@ class ComplianceValidator:
                 if cit.bbox:
                     instance_msg = (
                         f"Citation '{cit.text}' uses numeric/IEEE format. "
-                        f"Refer to the ISPRS formatting guidelines for the "
-                        f"required author-year citation style."
+                        f"ISPRS requires the author-year style — e.g. "
+                        f"(Smith, 2020), (Smith and Jones, 2020), or "
+                        f"(Smith et al., 2020) per §3.5."
                     )
                     element_refs.append((cit.page, cit.bbox, instance_msg))
 
@@ -667,9 +686,7 @@ class ComplianceValidator:
                 severity=Severity.WARNING,
                 message=f"Found {len(numeric_examples)} citation(s) using numeric/IEEE format",
                 details=(
-                    f"Refer to the ISPRS formatting guidelines for the "
-                    f"required author-year citation style. "
-                    f"Affected: {'; '.join(shown)}{suffix}"
+                    f"Affected: {'; '.join(shown)}{suffix}. {ISPRS_CITATION_EXAMPLES}"
                 ),
                 element_refs=element_refs if element_refs else None,
             ))
