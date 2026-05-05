@@ -2460,11 +2460,21 @@ class ComplianceValidator:
             if right_offset > justify_tolerance:
                 problems.append(f"right edge {right_offset:.0f}pt short of column edge")
 
-            if problems:
+            # Detect a leading "-" / "–" / "•" / "▪" bullet marker on the
+            # reference. Some authors prefix entries with a dash that's
+            # both visually wrong AND breaks justification — surface that
+            # in the same flag so reviewers see "fix the spacing AND
+            # remove the dash" together.
+            ref_text = (getattr(ref, 'text', '') or '').lstrip()
+            has_leading_bullet = bool(ref_text and ref_text[0] in '-–—•▪‣')
+
+            if problems or has_leading_bullet:
                 elem_ref = (ref.page, ref.bbox) if hasattr(ref, 'page') else None
                 alignment_issues.append({
                     'text': ref.text[:40] if hasattr(ref, 'text') else '',
                     'problems': problems,
+                    'leading_bullet': has_leading_bullet,
+                    'leading_char': ref_text[:1] if has_leading_bullet else '',
                     'element_ref': elem_ref,
                 })
 
@@ -2472,16 +2482,32 @@ class ComplianceValidator:
         for issue in alignment_issues:
             if issue.get('element_ref'):
                 page, bbox = issue['element_ref']
-                instance_msg = "Reference not fully justified: " + "; ".join(issue['problems'])
+                msg_parts = []
+                if issue['problems']:
+                    msg_parts.append("Reference not fully justified: " + "; ".join(issue['problems']))
+                if issue.get('leading_bullet'):
+                    ch = issue.get('leading_char', '-')
+                    msg_parts.append(
+                        f"reference has a leading '{ch}' symbol that should be removed"
+                    )
+                instance_msg = ". ".join(msg_parts)
                 element_refs.append((page, bbox, instance_msg))
 
         if alignment_issues:
+            justify_count = sum(1 for i in alignment_issues if i['problems'])
+            bullet_count = sum(1 for i in alignment_issues if i.get('leading_bullet'))
+            details_parts = ["ISPRS requires fully justified text (both left and right edges aligned to column boundaries)."]
+            if bullet_count:
+                details_parts.append(
+                    f"{bullet_count} reference(s) start with a stray '-'/'–' "
+                    f"symbol that should be removed."
+                )
             self.results.append(ValidationResult(
                 check_name="Reference Justification",
                 passed=False,
                 severity=Severity.WARNING,
                 message=f"{len(alignment_issues)} reference(s) not fully justified",
-                details="ISPRS requires fully justified text (both left and right edges aligned to column boundaries)",
+                details=" ".join(details_parts),
                 element_refs=element_refs if element_refs else None
             ))
         else:
