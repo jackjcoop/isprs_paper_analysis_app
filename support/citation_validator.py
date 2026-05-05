@@ -330,6 +330,20 @@ class CitationValidator:
         ))
         if has_author_initial:
             return False
+        # Organisational author block: "Open Topography, 2024.",
+        # "Rapidlasso, 2024.", "United Nations Department of …, 2024."
+        # — capitalised words followed by a comma and a 4-digit year, all
+        # within the leading text. Real corporate refs lack the
+        # Surname-Initial pattern but are still valid bibliography
+        # entries.
+        has_org_author = bool(re.match(
+            r'\s*[A-ZÀ-ɏ][a-zA-ZÀ-ɏ\-\'’]+'
+            r'(?:\s+[A-ZÀ-ɏ\(][a-zA-ZÀ-ɏ\-\'’\)]*)*'
+            r',\s+(?:19|20)\d{2}',
+            early,
+        ))
+        if has_org_author:
+            return False
         return True
 
     @staticmethod
