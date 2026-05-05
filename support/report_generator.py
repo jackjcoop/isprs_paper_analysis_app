@@ -430,7 +430,52 @@ class ReportGenerator:
             title="Manual Review Reminders"
         )
 
+        # 5. Disclaimer paragraph after the checklist grid
+        page, y_pos = self._draw_disclaimer(summary_doc, page, y_pos)
+
         return summary_doc
+
+    def _draw_disclaimer(
+        self,
+        doc: fitz.Document,
+        page: fitz.Page,
+        y: float,
+    ) -> Tuple[fitz.Page, float]:
+        """Draw a small italic disclaimer paragraph after the manual-review
+        checklist so authors understand the tool's scope and limitations.
+        """
+        text = (
+            "This software is experimental and has been developed to help "
+            "authors ensure proper formatting. It evaluates the paper's "
+            "formatting against the ISPRS formatting guidelines. As this "
+            "software relies on automated extraction of text and features, "
+            "it can encounter false positives or false negatives. It is the "
+            "author's responsibility to evaluate their paper fully for "
+            "potential issues and to make appropriate corrections."
+        )
+
+        x = MARGIN
+        width = CONTENT_WIDTH
+
+        # Reserve space for the paragraph (~7 lines at 10pt with leading);
+        # break to a new page if it won't fit.
+        estimated_height = 70
+        if y + estimated_height > PAGE_HEIGHT - MARGIN:
+            page = doc.new_page(width=PAGE_WIDTH, height=PAGE_HEIGHT)
+            y = MARGIN + 30
+
+        y += 10  # small gap above the disclaimer
+        rect = fitz.Rect(x, y, x + width, y + estimated_height)
+        page.insert_textbox(
+            rect,
+            text,
+            fontsize=8,
+            fontname="helv",
+            color=COLOR_GRAY,
+            align=fitz.TEXT_ALIGN_LEFT,
+        )
+
+        return page, y + estimated_height + 5
 
     def _draw_text(
         self,
