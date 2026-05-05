@@ -205,6 +205,10 @@ class CitationValidator:
     # bare "Smith2020" doesn't false-match.
     SCAN_PARENTHETICAL_PATTERN = re.compile(
         r'\(\s*'
+        # Optional leading initial("P. " or "P ") that some authors mis-
+        # write before the surname (e.g. "(P Nascimento and ...)"). The
+        # surname is what we want to capture, so we discard this prefix.
+        r'(?:[' + _CAP + r']\.?\s+)?'
         r'(?P<author>'
         r'(?:(?:van der|van den|van|von|de la|de|del|della|der|den|du|da|dos|el|la|le|ten|ter)\s+)?'
         r'[' + _CAP + r'][' + _LET + r'\-]+'
@@ -1875,7 +1879,10 @@ class CitationValidator:
             elem_bbox = getattr(elem, 'bbox', None)
             if not elem_text or elem_page is None:
                 continue
-            for m in self.SCAN_PARENTHETICAL_PATTERN.finditer(elem_text):
+            # Repair line-break hyphens ("Nasci-\nmento" -> "Nascimento")
+            # so the scanner can match citations split across lines.
+            scan_text = self._fix_line_break_hyphens(elem_text)
+            for m in self.SCAN_PARENTHETICAL_PATTERN.finditer(scan_text):
                 full_text = m.group(0)
                 key = self._normalize_citation_key(full_text)
                 if key in existing_cit_texts:
