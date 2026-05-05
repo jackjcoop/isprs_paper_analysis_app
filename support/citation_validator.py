@@ -1029,11 +1029,12 @@ class CitationValidator:
             primary_surname = apa_match.group('author').strip()
             year = apa_match.group('year')
 
-        # Try NER first (handles all variable formats like "Smith described in 2020")
-        if (not primary_surname or not year) and SPACY_AVAILABLE and _nlp:
-            primary_surname, year = self._parse_citation_with_ner(normalized_text)
-
-        # Fall back to regex patterns if NER didn't find both author and year
+        # Run regex patterns BEFORE NER. spaCy's English NER often misses
+        # less-common surnames (Italian, Slavic, Asian) and picks the
+        # second author of a "Author and Author (Year)" citation as the
+        # only PERSON entity, producing the wrong primary author. The
+        # explicit citation patterns are deterministic and structurally
+        # correct for ISPRS forms, so they run first.
         if not primary_surname or not year:
             # Try patterns in order of specificity
             # 1. Check Parenthetical: (Smith, 2020)
@@ -1071,6 +1072,16 @@ class CitationValidator:
                                 if comma_match:
                                     primary_surname = comma_match.group('author').strip()
                                     year = comma_match.group('year')
+
+        # NER as a last-resort fallback for unusual citation phrasing
+        # ("Smith described in 2020", "In 2020, Smith found …") that none
+        # of the regex patterns above caught.
+        if (not primary_surname or not year) and SPACY_AVAILABLE and _nlp:
+            ner_surname, ner_year = self._parse_citation_with_ner(normalized_text)
+            if not primary_surname:
+                primary_surname = ner_surname
+            if not year:
+                year = ner_year
 
         # No-date fallback: "Author, n.d." style citations have no year, so
         # the year-based patterns above can't anchor on them. Year stays None
