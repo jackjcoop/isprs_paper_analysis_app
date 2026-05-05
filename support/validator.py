@@ -977,6 +977,9 @@ class ComplianceValidator:
         # Reference justification validation (full justification within columns)
         self._check_reference_justification(extracted_elements, page_dimensions[0], citation_results)
 
+        # Reference author-comma formatting (flag "Surname Initial" without comma)
+        self._check_reference_author_format(citation_results)
+
         # Body text justification (Main_Text fully justified)
         self._check_body_justification(extracted_elements, page_dimensions[0])
 
@@ -2389,6 +2392,82 @@ class ComplianceValidator:
                 severity=Severity.SUCCESS,
                 message="References are in alphabetical order",
                 details=f"Checked {len(ref_data)} references"
+            ))
+
+    def _check_reference_author_format(
+        self,
+        citation_results: Optional[Dict],
+    ) -> None:
+        """Flag references that use "Surname Initial." (no comma) instead
+        of the ISPRS-standard "Surname, Initial." form. Example violation:
+            Tamiminia H., Salehi B., Mahdianpari M., 2020. ...
+        Should be:
+            Tamiminia, H., Salehi, B., Mahdianpari, M., 2020. ...
+        """
+        if not citation_results:
+            return
+        references = citation_results.get('references_parsed', []) or []
+        if not references:
+            return
+
+        # Match a Surname (1+ caps + lowercase) followed directly by space
+        # + uppercase initial + period — with NO comma between surname and
+        # initial. The lookbehind keeps us from matching mid-word matches
+        # (continuation lines).
+        bad_re = re.compile(
+            r'(?<![,.\w])'
+            r'([A-ZÀ-ɏ][a-zA-ZÀ-ɏ\-\'’]+)\s+'
+            r'([A-Z](?:\.[\-\s]*[A-Z])*\.?)'
+            r'(?=[,\s])'
+        )
+        # Skip false positives like "Open Topography," or "United States…"
+        # where multi-word org names look like Surname-then-initial-ish.
+        # Real violations always have the second token as 1–4 capitals
+        # with internal periods (e.g. "H.", "K.L.", "F.J.Jr.").
+        initial_only_re = re.compile(r'^[A-Z](?:\.[\-\s]*[A-Z])*\.?$')
+
+        flagged = []
+        element_refs = []
+        for ref in references:
+            text = (getattr(ref, 'original_text', '') or '').replace('\n', ' ')
+            if not text:
+                continue
+            samples = []
+            for m in bad_re.finditer(text[:400]):
+                second = m.group(2).strip()
+                if not initial_only_re.match(second):
+                    continue
+                samples.append(m.group(0))
+                if len(samples) >= 3:
+                    break
+            if not samples:
+                continue
+            label = f"'{text[:50]}{'...' if len(text) > 50 else ''}'"
+            flagged.append(f"{label}: {', '.join(samples)}")
+            page = getattr(ref, 'page', None)
+            bbox = getattr(ref, 'bbox', None)
+            if page is not None and bbox:
+                instance_msg = (
+                    f"Reference uses 'Surname Initial' without a comma "
+                    f"({', '.join(samples)}) — should be 'Surname, Initial.' "
+                    f"per ISPRS format"
+                )
+                element_refs.append((page, bbox, instance_msg))
+
+        if flagged:
+            shown = flagged[:6]
+            suffix = f' (and {len(flagged) - 6} more)' if len(flagged) > 6 else ''
+            self.results.append(ValidationResult(
+                check_name="Reference Author Format",
+                passed=False,
+                severity=Severity.WARNING,
+                message=f"{len(flagged)} reference(s) missing comma between surname and initial",
+                details=(
+                    "ISPRS references use 'Surname, Initial.' (with comma) — "
+                    f"e.g. 'Tamiminia, H., Salehi, B.' not 'Tamiminia H., Salehi B.'. "
+                    f"Affected: {'; '.join(shown)}{suffix}"
+                ),
+                element_refs=element_refs if element_refs else None,
             ))
 
     def _check_reference_justification(
