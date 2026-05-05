@@ -2421,6 +2421,22 @@ class ComplianceValidator:
                 details=f"Checked {len(ref_data)} references"
             ))
 
+    @staticmethod
+    def _fix_line_break_hyphens_in_ref(text: str) -> str:
+        """Repair line-break hyphens that split words across lines in
+        reference text. Two cases:
+          1. Standard hyphenation: "Shah-\\nmohamadi" -> "Shahmohamadi"
+             (second segment starts with a lowercase letter).
+          2. All-caps abbreviation broken across lines: "IS-\\nPRS J." ->
+             "ISPRS J." (short all-caps continuation, e.g. journal
+             abbreviation hyphenated by the typesetter).
+        """
+        # Lowercase continuation
+        text = re.sub(r'(\w)-\s+([a-zà-öø-ÿā-ɏ])', r'\1\2', text)
+        # Short all-caps continuation (1-5 chars) — e.g. ISPRS, NASA, GIS
+        text = re.sub(r'(\w)-\s+([A-Z]{1,5})\b', r'\1\2', text)
+        return text
+
     def _check_reference_author_format(
         self,
         citation_results: Optional[Dict],
@@ -2437,28 +2453,33 @@ class ComplianceValidator:
         if not references:
             return
 
-        # Match a Surname (1+ caps + lowercase) followed directly by space
-        # + uppercase initial + period — with NO comma between surname and
-        # initial. The lookbehind keeps us from matching mid-word matches
-        # (continuation lines).
+        # Match a Surname (capital + at least one LOWERCASE letter, then
+        # any letters/hyphen/apostrophe) followed by space + uppercase
+        # initial + period — with NO comma between surname and initial.
+        # Requiring a lowercase second char excludes all-caps abbreviations
+        # like "ISPRS J.", "PRS J.", "DOI", "GIS" that aren't real
+        # surnames.
         bad_re = re.compile(
             r'(?<![,.\w])'
-            r'([A-ZÀ-ɏ][a-zA-ZÀ-ɏ\-\'’]+)\s+'
+            r'([A-ZÀ-ɏ][a-zà-öø-ÿā-ɏ][a-zA-ZÀ-ɏ\-\'’]*)\s+'
             r'([A-Z](?:\.[\-\s]*[A-Z])*\.?)'
             r'(?=[,\s])'
         )
-        # Skip false positives like "Open Topography," or "United States…"
-        # where multi-word org names look like Surname-then-initial-ish.
-        # Real violations always have the second token as 1–4 capitals
-        # with internal periods (e.g. "H.", "K.L.", "F.J.Jr.").
+        # The second group must be a pure 1-4 letter initial sequence with
+        # internal periods ("H.", "K.L.", "F.J.Jr."). Reject false positives
+        # where the "initial" is actually the start of a multi-letter word.
         initial_only_re = re.compile(r'^[A-Z](?:\.[\-\s]*[A-Z])*\.?$')
 
         flagged = []
         element_refs = []
         for ref in references:
-            text = (getattr(ref, 'original_text', '') or '').replace('\n', ' ')
-            if not text:
+            raw = getattr(ref, 'original_text', '') or ''
+            if not raw:
                 continue
+            # Repair line-break hyphens first ("IS-\nPRS" -> "ISPRS") so
+            # split journal abbreviations don't surface as "PRS J." style
+            # phantom violations.
+            text = self._fix_line_break_hyphens_in_ref(raw).replace('\n', ' ')
             samples = []
             for m in bad_re.finditer(text[:400]):
                 second = m.group(2).strip()
