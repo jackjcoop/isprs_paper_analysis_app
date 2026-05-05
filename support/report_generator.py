@@ -830,16 +830,33 @@ class ReportGenerator:
             )
             y += 20
 
+        # Wrap each item across multiple lines instead of truncating with
+        # ellipsis. Width chosen to fit the column at 8pt helvetica.
+        import textwrap
+        WRAP_WIDTH = 58
+        LINE_HEIGHT = 11
+
+        def _wrap_item(item: str) -> List[str]:
+            # Use the checkbox glyph on the first line and indent
+            # continuation lines so they line up under the item text.
+            lines = textwrap.wrap(item, width=WRAP_WIDTH) or [item]
+            return [f"☐ {lines[0]}"] + [f"   {ln}" for ln in lines[1:]]
+
+        def _wrapped_lines(items: List[str]) -> List[List[str]]:
+            return [_wrap_item(it) for it in items]
+
         # Pair up categories for 2-column layout
         for i in range(0, len(categories), 2):
             left_cat = categories[i]
             right_cat = categories[i + 1] if i + 1 < len(categories) else None
 
-            # Calculate row heights
-            left_items = len(left_cat['items'])
-            right_items = len(right_cat['items']) if right_cat else 0
-            max_items = max(left_items, right_items)
-            box_height = 22 + max_items * 14
+            left_lines_per_item = _wrapped_lines(left_cat['items'])
+            right_lines_per_item = _wrapped_lines(right_cat['items']) if right_cat else []
+
+            left_total_lines = sum(len(lines) for lines in left_lines_per_item)
+            right_total_lines = sum(len(lines) for lines in right_lines_per_item)
+            max_lines = max(left_total_lines, right_total_lines)
+            box_height = 22 + max_lines * LINE_HEIGHT + 4
 
             # Page break if this row won't fit
             if y + box_height > PAGE_HEIGHT - MARGIN:
@@ -859,17 +876,18 @@ class ReportGenerator:
                 color=COLOR_INFO
             )
 
-            # Left items
+            # Left items (wrapped)
             item_y = y + 28
-            for item in left_cat['items']:
-                page.insert_text(
-                    (x + 12, item_y),
-                    f"☐ {item[:45]}{'...' if len(item) > 45 else ''}",
-                    fontsize=8,
-                    fontname="helv",
-                    color=COLOR_DARK
-                )
-                item_y += 14
+            for lines in left_lines_per_item:
+                for ln in lines:
+                    page.insert_text(
+                        (x + 12, item_y),
+                        ln,
+                        fontsize=8,
+                        fontname="helv",
+                        color=COLOR_DARK,
+                    )
+                    item_y += LINE_HEIGHT
 
             # Draw right box if exists
             if right_cat:
@@ -886,17 +904,18 @@ class ReportGenerator:
                     color=COLOR_INFO
                 )
 
-                # Right items
+                # Right items (wrapped)
                 item_y = y + 28
-                for item in right_cat['items']:
-                    page.insert_text(
-                        (right_x + 12, item_y),
-                        f"☐ {item[:45]}{'...' if len(item) > 45 else ''}",
-                        fontsize=8,
-                        fontname="helv",
-                        color=COLOR_DARK
-                    )
-                    item_y += 14
+                for lines in right_lines_per_item:
+                    for ln in lines:
+                        page.insert_text(
+                            (right_x + 12, item_y),
+                            ln,
+                            fontsize=8,
+                            fontname="helv",
+                            color=COLOR_DARK,
+                        )
+                        item_y += LINE_HEIGHT
 
             y += box_height + 5
 
