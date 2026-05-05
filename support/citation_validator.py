@@ -271,6 +271,32 @@ class CitationValidator:
         """Normalizes text by removing extra whitespace and newlines."""
         return ' '.join(text.split())
 
+    @staticmethod
+    def _repair_split_year(text: str) -> str:
+        """Merge a 4-digit year that got split across a line break.
+
+        Document AI sometimes preserves the original line break inside a
+        year, leaving "20 22" or "19 98" after whitespace normalisation.
+        The year regex relies on contiguous digits, so without repair the
+        reference parses with year=None.
+
+        Patterns repaired:
+          - "20<ws>22"   -> "2022"
+          - "19<ws>98a"  -> "1998a" (preserves year suffix)
+          - "2<ws>022"   -> "2022"  (rare 1-3 split)
+          - "202<ws>2"   -> "2022"  (rare 3-1 split)
+        """
+        # 2-2 split (most common): "20 22", possibly followed by a suffix
+        # letter ("20 22a"). The (?!\d) lookahead prevents over-matching
+        # of a real year next to a different number ("20 1998" -> won't
+        # touch the leading "20").
+        text = re.sub(r'\b((?:19|20))\s+(\d{2})(?!\d)', r'\1\2', text)
+        # 1-3 split: "2 022", "1 998"
+        text = re.sub(r'\b([12])\s+([0-9]{3})(?!\d)', r'\1\2', text)
+        # 3-1 split: "202 2", "199 8"
+        text = re.sub(r'\b((?:19|20)\d)\s+(\d)(?!\d)', r'\1\2', text)
+        return text
+
     # Characters that NFKD decomposition does not reduce to ASCII base letters.
     # These appear in academic author names extracted from PDFs and must map to
     # their plain Latin equivalents for matching.
@@ -734,6 +760,11 @@ class CitationValidator:
         cleaned_text = self._clean_text(reference_text)
         # Fix line-break hyphens (e.g., "Houwel- ing" -> "Houweling")
         cleaned_text = self._fix_line_break_hyphens(cleaned_text)
+        # Repair years split across line breaks: "20\n22" -> "2022",
+        # "19\n98" -> "1998", "20\n22a" -> "2022a". Document AI sometimes
+        # preserves the line break inside a year, which makes the regex
+        # `\b(19|20)\d{2}\b` miss it entirely.
+        cleaned_text = self._repair_split_year(cleaned_text)
         # If Document AI bundled non-reference text (figure captions,
         # abstract paragraphs) ahead of the actual reference, isolate the
         # real Surname, I., ..., YYYY. cluster and drop the leading garbage.
