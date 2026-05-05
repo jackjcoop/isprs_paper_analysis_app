@@ -1791,7 +1791,18 @@ class CitationValidator:
             r_pos = _reading_pos(r)
             if r_pos is None:
                 return False
-            return r_pos < ref_heading_pos
+            # Tolerate small bbox overlap: the first reference often has
+            # a bbox that starts a few points above the heading (e.g.
+            # heading at y=73, first ref at y=71). Only drop when the
+            # reference is clearly above — same page+column AND y0 is
+            # 15+ points above the heading's y0.
+            r_page, r_col, r_y = r_pos
+            h_page, h_col, h_y = ref_heading_pos
+            if r_page != h_page:
+                return r_page < h_page
+            if r_col != h_col:
+                return r_col < h_col
+            return r_y + 15 < h_y
 
         # Filter out elements Document AI mis-classified as References — most
         # commonly figure captions, chart data blocks, panel labels, or body
