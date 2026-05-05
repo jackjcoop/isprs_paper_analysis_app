@@ -319,13 +319,13 @@ class CitationValidator:
         )) or bool(re.search(r'\b\d+\s*,\s*\d+\s*[\-–]\s*\d+\b', early))
         if not has_journal_metadata:
             return False
-        # Surname followed by 1+ initials. Some authors have 3+ initials
-        # (e.g. "Setiadi, D.R.I.M., 2021"), so we allow any count rather
-        # than capping at 3 — capping caused the whole reference to be
-        # dropped as a "journal fragment" because the initial-pattern
-        # check failed.
+        # Surname followed by 1+ initials. Allow:
+        # - 3+ initials ("D.R.I.M.")
+        # - Hyphen-joined initials ("C.-C.", "K.-W.") common in Chinese
+        #   and Korean naming conventions.
+        # - Spaces between initials ("J. A.").
         has_author_initial = bool(re.search(
-            r'[A-ZÀ-ɏ][a-zA-ZÀ-ɏ\-\'’]+,\s+(?:[A-Z]\.?\s*){1,}[,\s]',
+            r'[A-ZÀ-ɏ][a-zA-ZÀ-ɏ\-\'’]+,\s+(?:[A-Z]\.?[\-\s]*){1,}[,\s]',
             early,
         ))
         if has_author_initial:
