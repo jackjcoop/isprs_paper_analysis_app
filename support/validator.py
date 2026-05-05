@@ -1079,13 +1079,17 @@ class ComplianceValidator:
 
         normalized = [_heading_text(h).lower() for h in headings]
 
+        # Match the keyword anywhere in the heading text — headings like
+        # "Discussion and Conclusion" or "Conclusion and Future Work" still
+        # satisfy the requirement even though "Conclusion(s)" isn't the
+        # first word.
         required = [
-            ('Introduction', re.compile(r'^introduction\b')),
-            ('Conclusions', re.compile(r'^conclusions?\b')),
+            ('Introduction', re.compile(r'\bintroduction\b')),
+            ('Conclusions', re.compile(r'\bconclusions?\b')),
         ]
 
         for name, pattern in required:
-            matched = [h for h, n in zip(headings, normalized) if pattern.match(n)]
+            matched = [h for h, n in zip(headings, normalized) if pattern.search(n)]
             if matched:
                 self.results.append(ValidationResult(
                     check_name=f"Required Section: {name}",
