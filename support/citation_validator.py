@@ -388,6 +388,17 @@ class CitationValidator:
         if not text:
             return False
         head = text.strip()
+        # APA-style reference start: "Author. (YEAR)." or
+        # "Author Surname (YEAR)." — single capitalised word(s) followed
+        # by a parenthesised 4-digit year. Always a real reference, never
+        # prose.
+        if re.match(
+            r'^\s*[A-ZÀ-ɏ][a-zA-ZÀ-ɏ\-\'’]+'
+            r'(?:[\.\s]+[A-ZÀ-ɏ][a-zA-ZÀ-ɏ\-\'’]+)*'
+            r'\.?\s*\(\s*(?:19|20)\d{2}[a-z]?\s*\)',
+            head,
+        ):
+            return False
         first_two = re.match(r'^(\S+)\s+(\S+)', head)
         if not first_two:
             return False
