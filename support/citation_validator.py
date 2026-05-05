@@ -324,8 +324,10 @@ class CitationValidator:
         # - Hyphen-joined initials ("C.-C.", "K.-W.") common in Chinese
         #   and Korean naming conventions.
         # - Spaces between initials ("J. A.").
+        # - No-comma variant ("Tamiminia H., Salehi B., ...") sometimes
+        #   used by ISPRS Archives templates.
         has_author_initial = bool(re.search(
-            r'[A-ZÀ-ɏ][a-zA-ZÀ-ɏ\-\'’]+,\s+(?:[A-Z]\.?[\-\s]*){1,}[,\s]',
+            r'[A-ZÀ-ɏ][a-zA-ZÀ-ɏ\-\'’]+(?:,\s+|\s+)(?:[A-Z]\.?[\-\s]*){1,}[,\s]',
             early,
         ))
         if has_author_initial:
@@ -1432,7 +1434,14 @@ class CitationValidator:
             re.IGNORECASE
         )
 
-        target = int(float_number)
+        # Compound/range matching ("Figures 1-3", "Tables 2 and 3") only
+        # makes sense for plain integer numbers. Sub-numbered floats like
+        # "8.2" or appendix labels like "A.1" can only be matched by the
+        # direct regex above — int(float_number) would raise on them.
+        try:
+            target = int(float_number)
+        except ValueError:
+            target = None
 
         for element in main_text_elements:
             if not hasattr(element, 'text'):
@@ -1449,6 +1458,9 @@ class CitationValidator:
             # Fast path: direct mention
             if direct.search(text):
                 return True
+
+            if target is None:
+                continue
 
             # Compound path: "Tables 2 and 3" → check if target is in the list
             for m in compound.finditer(text):
