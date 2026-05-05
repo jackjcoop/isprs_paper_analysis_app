@@ -2399,12 +2399,27 @@ class ComplianceValidator:
     ):
         """Check references are fully justified (left and right) within their columns."""
         # Use combined references from citation_results if available
+        raw_refs_by_bbox = {}
+        for raw in extracted_elements.get('References', []):
+            rb = getattr(raw, 'bbox', None)
+            rp = getattr(raw, 'page', None)
+            if rb is None or rp is None:
+                continue
+            raw_refs_by_bbox[(rp, tuple(rb))] = raw
+
         if citation_results and 'references_parsed' in citation_results:
             class RefWrapper:
                 def __init__(self, parsed_ref):
                     self.text = parsed_ref.original_text
                     self.page = parsed_ref.page if parsed_ref.page is not None else 0
                     self.bbox = parsed_ref.bbox
+                    # Attach the raw element's spans (if we can find a
+                    # matching bbox) so the hanging-indent check can group
+                    # spans into lines.
+                    raw = raw_refs_by_bbox.get(
+                        (self.page, tuple(self.bbox)) if self.bbox else None
+                    )
+                    self.spans = getattr(raw, 'spans', None) if raw else None
             references = [RefWrapper(r) for r in citation_results['references_parsed'] if r.bbox]
         else:
             references = [r for r in extracted_elements.get('References', []) if hasattr(r, 'bbox') and r.bbox]
@@ -2468,13 +2483,37 @@ class ComplianceValidator:
             ref_text = (getattr(ref, 'text', '') or '').lstrip()
             has_leading_bullet = bool(ref_text and ref_text[0] in '-–—•▪‣')
 
-            if problems or has_leading_bullet:
+            # Detect hanging indent: first line at column edge but every
+            # subsequent line indented by 5+ points. ISPRS calls for block
+            # formatting (all lines flush-left), so a hanging indent is a
+            # format violation.
+            hanging_indent_pt = None
+            spans = getattr(ref, 'spans', None) or []
+            if spans:
+                # Group spans into rough lines by y-position (4pt buckets).
+                from collections import defaultdict as _dd
+                lines_by_y = _dd(list)
+                for s in spans:
+                    sb = getattr(s, 'bbox', None)
+                    if not sb:
+                        continue
+                    lines_by_y[round(sb[1] / 4)].append(sb[0])
+                line_lefts = [min(xs) for _, xs in sorted(lines_by_y.items())]
+                if len(line_lefts) >= 2:
+                    first_x = line_lefts[0]
+                    rest_min = min(line_lefts[1:])
+                    indent = rest_min - first_x
+                    if indent > 5 and all((x - first_x) > 5 for x in line_lefts[1:]):
+                        hanging_indent_pt = indent
+
+            if problems or has_leading_bullet or hanging_indent_pt is not None:
                 elem_ref = (ref.page, ref.bbox) if hasattr(ref, 'page') else None
                 alignment_issues.append({
                     'text': ref.text[:40] if hasattr(ref, 'text') else '',
                     'problems': problems,
                     'leading_bullet': has_leading_bullet,
                     'leading_char': ref_text[:1] if has_leading_bullet else '',
+                    'hanging_indent': hanging_indent_pt,
                     'element_ref': elem_ref,
                 })
 
@@ -2490,17 +2529,29 @@ class ComplianceValidator:
                     msg_parts.append(
                         f"reference has a leading '{ch}' symbol that should be removed"
                     )
+                if issue.get('hanging_indent') is not None:
+                    indent = issue['hanging_indent']
+                    msg_parts.append(
+                        f"continuation lines are indented ~{indent:.0f}pt — "
+                        f"references should use block format (no hanging indent)"
+                    )
                 instance_msg = ". ".join(msg_parts)
                 element_refs.append((page, bbox, instance_msg))
 
         if alignment_issues:
-            justify_count = sum(1 for i in alignment_issues if i['problems'])
             bullet_count = sum(1 for i in alignment_issues if i.get('leading_bullet'))
+            indent_count = sum(1 for i in alignment_issues if i.get('hanging_indent') is not None)
             details_parts = ["ISPRS requires fully justified text (both left and right edges aligned to column boundaries)."]
             if bullet_count:
                 details_parts.append(
                     f"{bullet_count} reference(s) start with a stray '-'/'–' "
                     f"symbol that should be removed."
+                )
+            if indent_count:
+                details_parts.append(
+                    f"{indent_count} reference(s) use a hanging indent — "
+                    f"continuation lines should align with the first line "
+                    f"at the column edge (block format)."
                 )
             self.results.append(ValidationResult(
                 check_name="Reference Justification",
