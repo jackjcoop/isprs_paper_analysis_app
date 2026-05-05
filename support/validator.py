@@ -2591,11 +2591,47 @@ class ComplianceValidator:
 
         right_margin = PAGE_REQUIREMENTS['margins']['right']
         mid_page = page_width / 2
-        column_gap = 17  # 6mm
-        left_col_right = mid_page - column_gap / 2
-        right_col_right = page_width - right_margin
+        column_gap = 17  # 6mm — assumed default
+        default_left_col_right = mid_page - column_gap / 2
+        default_right_col_right = page_width - right_margin
 
         right_edge_tolerance = 8   # ±8pt for an interior line to count as reaching the right edge
+
+        # Empirically measure the actual column right edge per (page, column).
+        # Some templates (e.g. ISPRS Archives abstracts) use a wider gutter
+        # than the standard 6mm/17pt assumed above, so a hardcoded boundary
+        # would systematically flag every paragraph as "short of right edge".
+        # We sample the *maximum* x1 of every span across all Main_Text on
+        # each side of the page and take that as the column edge — that's
+        # where lines actually reach when the paragraph is justified.
+        col_right_by_page: Dict[Tuple[int, int], float] = {}
+        for elem in main_texts:
+            page = getattr(elem, 'page', 0) or 0
+            for s in elem.spans:
+                bb = getattr(s, 'bbox', None)
+                if not bb:
+                    continue
+                x_center = (bb[0] + bb[2]) / 2
+                col = 0 if x_center < mid_page else 1
+                key = (page, col)
+                cur = col_right_by_page.get(key)
+                if cur is None or bb[2] > cur:
+                    col_right_by_page[key] = bb[2]
+
+        def _measured_col_right(page: int, col: int, default: float) -> float:
+            measured = col_right_by_page.get((page, col))
+            if measured is None:
+                return default
+            # Clamp to a sane range so a wildly wrong measurement (e.g. an
+            # element overflowing the column) can't push the boundary out
+            # to the far page edge.
+            min_allowed = default - 40
+            max_allowed = default + 5
+            if measured > max_allowed:
+                return default
+            if measured < min_allowed:
+                return default
+            return measured
         # Group spans into a line by vertical-bbox overlap with the running
         # line bbox. Subscripts/superscripts and inline equations have shifted
         # baselines but their bboxes still sit inside the host line's vertical
@@ -2682,7 +2718,10 @@ class ComplianceValidator:
             total_checked += 1
 
             elem_center_x = (elem.bbox[0] + elem.bbox[2]) / 2
-            expected_right = left_col_right if elem_center_x < mid_page else right_col_right
+            elem_col = 0 if elem_center_x < mid_page else 1
+            elem_page = getattr(elem, 'page', 0) or 0
+            default_edge = default_left_col_right if elem_col == 0 else default_right_col_right
+            expected_right = _measured_col_right(elem_page, elem_col, default_edge)
 
             # Drop the last line — even justified paragraphs end short
             interior_lines = line_bboxes[:-1]
