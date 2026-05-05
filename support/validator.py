@@ -95,6 +95,16 @@ ISPRS_CITATION_EXAMPLES = (
     "(GRASS Development Team, 2017) for software."
 )
 
+# Canonical ISPRS bibliography reference forms (per §3.5).
+ISPRS_REFERENCE_EXAMPLES = (
+    "Proper ISPRS reference forms: "
+    "single author 'Gago-Silva, A., 2016. Title…'; "
+    "two authors 'Förstner, W., Wrobel, B., 2016: Title…'; "
+    "multi-author 'Dubayah, R.O., Swatantran, A., Huang, W., …, 2017. Title…'; "
+    "organisation 'GRASS Development Team, 2017. Title…'. "
+    "Each surname must be followed by a comma before the initials."
+)
+
 
 @dataclass
 class ValidationResult:
@@ -2467,7 +2477,9 @@ class ComplianceValidator:
                 instance_msg = (
                     f"Reference uses 'Surname Initial' without a comma "
                     f"({', '.join(samples)}) — should be 'Surname, Initial.' "
-                    f"per ISPRS format"
+                    f"per ISPRS format. "
+                    f"E.g. 'Förstner, W., Wrobel, B., 2016: …' or "
+                    f"'Dubayah, R.O., Swatantran, A., …, 2017. …'"
                 )
                 element_refs.append((page, bbox, instance_msg))
 
@@ -2480,9 +2492,7 @@ class ComplianceValidator:
                 severity=Severity.WARNING,
                 message=f"{len(flagged)} reference(s) missing comma between surname and initial",
                 details=(
-                    "ISPRS references use 'Surname, Initial.' (with comma) — "
-                    f"e.g. 'Tamiminia, H., Salehi, B.' not 'Tamiminia H., Salehi B.'. "
-                    f"Affected: {'; '.join(shown)}{suffix}"
+                    f"Affected: {'; '.join(shown)}{suffix}. {ISPRS_REFERENCE_EXAMPLES}"
                 ),
                 element_refs=element_refs if element_refs else None,
             ))
