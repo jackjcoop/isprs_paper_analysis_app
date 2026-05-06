@@ -4,6 +4,7 @@ Extracts text and bounding boxes from PDF documents using Document AI.
 """
 
 import os
+import tempfile
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 from google.cloud import documentai_v1 as documentai
@@ -40,6 +41,10 @@ class ExtractedElement:
 
 class DocumentAIClient:
     """Client for Google Cloud Document AI API."""
+
+    # Sync `process_document` rejects PDFs longer than this. Anything bigger
+    # is split into chunks of this size and stitched back together.
+    MAX_PAGES_PER_REQUEST = 15
 
     def __init__(
         self,
@@ -116,6 +121,77 @@ class DocumentAIClient:
         result = self.client.process_document(request=request)
 
         return result.document
+
+    def process_and_extract(
+        self,
+        pdf_path: str,
+    ) -> Dict[str, List[ExtractedElement]]:
+        """
+        Process a PDF and return elements keyed by type, automatically
+        splitting PDFs that exceed the per-request page limit into chunks
+        and stitching the results back together.
+
+        Bounding boxes use per-page normalized coordinates, so only the
+        ``page`` index needs adjustment when merging chunks back to the
+        original document.
+        """
+        import fitz  # PyMuPDF, already a project dependency
+
+        with fitz.open(pdf_path) as doc:
+            page_count = len(doc)
+
+        if page_count <= self.MAX_PAGES_PER_REQUEST:
+            document = self.process_document(pdf_path)
+            return self.extract_elements_by_type(document)
+
+        return self._process_chunked(pdf_path, page_count)
+
+    def _process_chunked(
+        self,
+        pdf_path: str,
+        page_count: int,
+    ) -> Dict[str, List[ExtractedElement]]:
+        """Split `pdf_path` into <= MAX_PAGES_PER_REQUEST page chunks, run
+        each through Document AI, and merge the elements with corrected
+        page indices."""
+        import fitz
+
+        merged: Dict[str, List[ExtractedElement]] = {}
+
+        with fitz.open(pdf_path) as src:
+            chunk_start = 0
+            while chunk_start < page_count:
+                chunk_end = min(
+                    chunk_start + self.MAX_PAGES_PER_REQUEST, page_count
+                )
+
+                chunk_doc = fitz.open()
+                chunk_doc.insert_pdf(
+                    src, from_page=chunk_start, to_page=chunk_end - 1
+                )
+
+                fd, tmp_path = tempfile.mkstemp(suffix=".pdf")
+                os.close(fd)
+                try:
+                    chunk_doc.save(tmp_path)
+                    chunk_doc.close()
+                    document = self.process_document(tmp_path)
+                    chunk_elements = self.extract_elements_by_type(document)
+                finally:
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
+
+                # Shift page indices from chunk-local to document-global.
+                for etype, elements in chunk_elements.items():
+                    for elem in elements:
+                        elem.bbox.page += chunk_start
+                    merged.setdefault(etype, []).extend(elements)
+
+                chunk_start = chunk_end
+
+        return merged
 
     def extract_elements_by_type(
         self,

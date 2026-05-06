@@ -7,16 +7,17 @@ Usage:
     python main.py <path_to_document> [--output <json_path>] [--credentials <path>] [--anon] [--report]
 """
 
+import json
 import re
 import sys
 import argparse
 from pathlib import Path
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 from dataclasses import asdict
 
 # Import support modules
 from support.converter import DocumentConverter
-from support.document_ai_client import DocumentAIClient, ExtractedElement
+from support.document_ai_client import DocumentAIClient, ExtractedElement, BoundingBox
 from support.pymupdf_extractor import PyMuPDFExtractor, EnrichedElement
 from support.validator import ComplianceValidator
 from support.output_generator import OutputGenerator
@@ -40,6 +41,53 @@ class ProgressIndicator:
             print("Done!")
         else:
             print("Failed!")
+
+
+def _save_ai_elements_cache(
+    ai_elements: Dict[str, List[ExtractedElement]],
+    cache_path: str,
+) -> None:
+    """Persist raw Document AI extraction so validation can be re-run later
+    without making another Document AI call."""
+    serialized = {
+        etype: [
+            {
+                "element_type": e.element_type,
+                "text": e.text,
+                "confidence": e.confidence,
+                "bbox": {
+                    "x0": e.bbox.x0,
+                    "y0": e.bbox.y0,
+                    "x1": e.bbox.x1,
+                    "y1": e.bbox.y1,
+                    "page": e.bbox.page,
+                },
+            }
+            for e in elements
+        ]
+        for etype, elements in ai_elements.items()
+    }
+    payload = {"version": 1, "ai_elements": serialized}
+    p = Path(cache_path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _load_ai_elements_cache(cache_path: str) -> Dict[str, List[ExtractedElement]]:
+    data = json.loads(Path(cache_path).read_text(encoding="utf-8"))
+    raw = data.get("ai_elements", {})
+    out: Dict[str, List[ExtractedElement]] = {}
+    for etype, items in raw.items():
+        out[etype] = [
+            ExtractedElement(
+                element_type=item["element_type"],
+                text=item["text"],
+                confidence=item.get("confidence", 1.0),
+                bbox=BoundingBox(**item["bbox"]),
+            )
+            for item in items
+        ]
+    return out
 
 
 class PDFComplianceAnalyzer:
@@ -91,13 +139,23 @@ class PDFComplianceAnalyzer:
         self.check_anonymization = check_anonymization
         self.generate_report_flag = generate_report
 
-    def analyze(self, document_path: str, output_path: str = None) -> Dict:
+    def analyze(
+        self,
+        document_path: str,
+        output_path: str = None,
+        ai_cache_path: Optional[str] = None,
+    ) -> Dict:
         """
         Analyze a document for compliance.
 
         Args:
             document_path: Path to document (PDF, DOCX, or TEX)
             output_path: Optional path for JSON output
+            ai_cache_path: Optional path to a Document AI extraction cache.
+                If the file exists, raw extracted elements are loaded from it
+                and the Document AI call is skipped. If it does not exist,
+                Document AI is called as normal and the result is written to
+                this path so that subsequent runs can reuse it.
 
         Returns:
             Analysis results dictionary
@@ -117,14 +175,24 @@ class PDFComplianceAnalyzer:
 
         print(f"Analyzing: {pdf_path}\n")
 
-        # Step 2: Extract using Document AI
-        with ProgressIndicator("Extracting text and bounding boxes (Document AI)"):
-            doc_ai_client = DocumentAIClient(
-                credentials_path=self.credentials_path,
-                credentials_info=self.credentials_info
-            )
-            doc_ai_document = doc_ai_client.process_document(pdf_path)
-            ai_elements = doc_ai_client.extract_elements_by_type(doc_ai_document)
+        # Step 2: Extract using Document AI (or load from cache to skip the call)
+        if ai_cache_path and Path(ai_cache_path).exists():
+            with ProgressIndicator(
+                f"Loading cached Document AI extraction from {ai_cache_path}"
+            ):
+                ai_elements = _load_ai_elements_cache(ai_cache_path)
+        else:
+            with ProgressIndicator("Extracting text and bounding boxes (Document AI)"):
+                doc_ai_client = DocumentAIClient(
+                    credentials_path=self.credentials_path,
+                    credentials_info=self.credentials_info
+                )
+                # Auto-chunks PDFs longer than the per-request page limit
+                # and stitches page indices back together.
+                ai_elements = doc_ai_client.process_and_extract(pdf_path)
+            if ai_cache_path:
+                with ProgressIndicator(f"Caching Document AI extraction to {ai_cache_path}"):
+                    _save_ai_elements_cache(ai_elements, ai_cache_path)
 
         # Step 3: Enrich with PyMuPDF font information
         with ProgressIndicator("Extracting font and style information (PyMuPDF)"):
